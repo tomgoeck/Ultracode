@@ -1,0 +1,197 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>MAKER Coding Agent UI</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 20px; background: #0d1117; color: #e6edf3; }
+    .card { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 16px; margin-bottom: 16px; }
+    label { display: block; margin-top: 8px; }
+    input, select { width: 100%; padding: 8px; border-radius: 6px; border: 1px solid #30363d; background: #0d1117; color: #e6edf3; }
+    button { margin-top: 10px; padding: 10px 14px; border: none; border-radius: 6px; background: #238636; color: white; cursor: pointer; }
+    button.secondary { background: #30363d; }
+    pre { background: #0d1117; border: 1px solid #30363d; padding: 10px; border-radius: 6px; overflow: auto; }
+    .row { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; }
+  </style>
+</head>
+<body>
+  <h1>MAKER Coding Agent</h1>
+
+  <div class="card">
+    <h2>Provider anlegen</h2>
+    <div class="row">
+      <div>
+        <label>Provider-Name/Label (Dropdown bestehend + frei)</label>
+        <input list="provider-names" id="prov-name" placeholder="z.B. openai-main" />
+        <datalist id="provider-names"></datalist>
+      </div>
+      <div>
+        <label>Typ</label>
+        <select id="prov-type" onchange="autoProbeModels()">
+          <option value="openai">OpenAI</option>
+          <option value="claude">Claude</option>
+          <option value="gemini">Gemini</option>
+          <option value="lmstudio">LM Studio</option>
+          <option value="echo">Echo (Stub)</option>
+        </select>
+      </div>
+      <div>
+        <label>API Key (für OpenAI/Claude/Gemini)</label>
+        <input id="prov-key" placeholder="sk-..." onblur="autoProbeModels()" />
+      </div>
+      <div>
+        <label>Base URL (optional)</label>
+        <input id="prov-base" placeholder="https://api.openai.com/v1 oder http://localhost:1234/v1" onblur="autoProbeModels()" />
+      </div>
+      <div>
+        <label>Model (Dropdown nach Auto-Load)</label>
+        <select id="prov-model"></select>
+      </div>
+    </div>
+    <button class="secondary" onclick="probeModels()">Modelle automatisch laden</button>
+    <button onclick="upsertProvider()">Speichern/Registrieren</button>
+    <button class="secondary" onclick="loadProviders()">Provider laden</button>
+    <pre id="providers-output">[]</pre>
+  </div>
+
+  <div class="card">
+    <h2>Provider-Auswahl</h2>
+    <p>Registrierte Provider, wähle für Task/Voting im Dropdown.</p>
+    <div class="row">
+      <div>
+        <label>Task Provider</label>
+        <select id="provider-select-main"></select>
+      </div>
+      <div>
+        <label>Voting Provider</label>
+        <select id="provider-select-vote"></select>
+      </div>
+      <div>
+        <label>Custom Task Provider</label>
+        <select id="provider-select-custom"></select>
+      </div>
+      <div>
+        <label>Custom Voting Provider</label>
+        <select id="provider-select-custom-vote"></select>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Modelle abrufen</h2>
+    <label>Provider-Name</label>
+    <input id="list-name" placeholder="z.B. openai-main" />
+    <button class="secondary" onclick="listModels()">Modelle holen</button>
+    <pre id="list-output">[]</pre>
+  </div>
+
+  <div class="card">
+    <h2>Command Safety</h2>
+    <label>Safety Mode</label>
+    <select id="safety-mode">
+      <option value="ask">ask (bestätigen bei med/high)</option>
+      <option value="auto">auto (alles ausführen)</option>
+    </select>
+    <button onclick="setSafety()">Setzen</button>
+    <label>Allowlist (Komma-separiert)</label>
+    <input id="allowlist" placeholder="npm test, ls" />
+    <label>Denylist (Komma-separiert)</label>
+    <input id="denylist" placeholder="rm , drop database" />
+    <button class="secondary" onclick="setCommandLists()">Allow/Deny setzen</button>
+  </div>
+
+  <div class="card">
+    <h2>Demo-Task ausführen</h2>
+    <div class="row">
+      <div>
+        <label>Haupt-Provider (Task)</label>
+        <select id="task-model"></select>
+      </div>
+      <div>
+        <label>Voting-Provider (leichtes Modell)</label>
+        <select id="vote-model"></select>
+      </div>
+    </div>
+    <button onclick="runDemo()">Demo ausführen</button>
+    <pre id="demo-output">Noch nichts ausgeführt.</pre>
+  </div>
+
+  <div class="card">
+    <h2>Custom Task</h2>
+    <div class="row">
+      <div>
+        <label>Title</label>
+        <input id="ct-title" placeholder="Titel" />
+      </div>
+      <div>
+        <label>Goal</label>
+        <input id="ct-goal" placeholder="Was soll erreicht werden?" />
+      </div>
+      <div>
+        <label>Dateipfad</label>
+        <input id="ct-file" placeholder="out/output.txt" />
+      </div>
+      <div>
+        <label>Haupt-Provider</label>
+        <select id="ct-model"></select>
+      </div>
+      <div>
+        <label>Voting-Provider (optional)</label>
+        <select id="ct-vote">
+          <option value="">(gleich wie Haupt)</option>
+        </select>
+      </div>
+    </div>
+    <button onclick="runCustom()">Task ausführen</button>
+    <pre id="custom-output">-</pre>
+  </div>
+
+  <div class="card">
+    <h2>State/Log</h2>
+    <button class="secondary" onclick="loadState()">State laden</button>
+    <pre id="state-output">{}</pre>
+  </div>
+
+  <div class="card">
+    <h2>Audit Logs</h2>
+    <button class="secondary" onclick="loadLogs()">Logs laden</button>
+    <pre id="logs-output">[]</pre>
+  </div>
+
+  <div class="card">
+    <h2>Live Events</h2>
+    <p>Zeigt Step-Start, Winner, Command-Output etc. in Echtzeit.</p>
+    <pre id="events-output" style="max-height:200px; overflow:auto;">(keine Events)</pre>
+  </div>
+
+  <div class="card">
+    <h2>Workspace</h2>
+    <label>Task ID</label>
+    <input id="ws-task-id" placeholder="task-..." />
+    <button class="secondary" onclick="loadWorkspace()">Baum laden</button>
+    <pre id="ws-output">[]</pre>
+  </div>
+
+  <div class="card">
+    <h2>Pending Commands</h2>
+    <button class="secondary" onclick="loadPending()">Aktualisieren</button>
+    <label>Command-ID zur Freigabe</label>
+    <input id="approve-id" placeholder="cmd-..." />
+    <button onclick="approveCommand()">Freigeben</button>
+    <pre id="pending-output">[]</pre>
+  </div>
+
+  <div class="card">
+    <h2>Diff Preview</h2>
+    <label>Zieldatei</label>
+    <input id="diff-path" placeholder="out/output.txt" />
+    <label>Neuer Inhalt</label>
+    <textarea id="diff-content" style="width:100%; height:120px; background:#0d1117; color:#e6edf3; border:1px solid #30363d; border-radius:6px;"></textarea>
+    <button onclick="previewDiff()">Diff anzeigen</button>
+    <pre id="diff-output">-</pre>
+  </div>
+
+  <script src="./ui.js"></script>
+</body>
+</html>

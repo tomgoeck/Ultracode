@@ -1,0 +1,20 @@
+```js
+import fs from 'fs';
+import path from 'path';
+
+export async function handler(req, res) {
+  const greeting = "Hello, welcome to the demo!";
+  const outDir = path.resolve('out');
+  if (!fs.existsSync(outDir)) {
+    fs.mkdirSync(outDir);
+  }
+  const logPath = path.join(outDir, 'demo.log');
+  fs.writeFileSync(logPath, greeting);
+  res.status(200).json({ message: greeting, logContent: greeting });
+}
+```
+
+```
+// Content of out/demo.log after running the handler:
+Hello, welcome to the demo!
+```
