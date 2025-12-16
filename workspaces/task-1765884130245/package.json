@@ -1,0 +1,29 @@
+```json
+{
+  "name": "unicorn-website",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Eine Website über Einhörner",
+  "scripts": {
+    "start": "react-scripts start",
+    "build": "react-scripts build"
+  },
+  "dependencies": {
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0"
+  },
+  "devDependencies": {
+    "react-scripts": "5.0.1"
+  },
+  "engines": {
+    "node": ">=14"
+  },
+  "keywords": [
+    "unicorn",
+    "einhorn",
+    "website",
+    "react"
+  ],
+  "license": "MIT"
+}
+```
