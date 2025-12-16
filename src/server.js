@@ -353,10 +353,17 @@ async function handleApi(req, res) {
         saveTasks();
 
         // Return immediately and run task in background
-        setImmediate(() => {
-          runTaskSequential(task).catch(err => {
+        setImmediate(async () => {
+          try {
+            await runTaskSequential(task);
+          } catch (err) {
             console.error(`[Task ${task.id}] Execution failed:`, err);
-          });
+            // Update task status to failed
+            task.status = "failed";
+            taskMeta.set(task.id, { ...taskMeta.get(task.id), status: "failed" });
+            saveTasks();
+            broadcast({ type: "task-failed", taskId: task.id, error: err.message });
+          }
         });
 
         return sendJson(res, 200, {
@@ -424,11 +431,21 @@ async function handleApi(req, res) {
       }
 
       if (url.pathname === "/api/tasks/preview-diff" && req.method === "POST") {
-        const { path: filePath, content } = body;
+        const { path: filePath, content, taskId } = body;
         if (!filePath || typeof content !== "string") {
           return sendJson(res, 400, { error: "path and content required" });
         }
-        const guard = new ProjectGuard(process.cwd());
+
+        // Get workspace path from task metadata
+        let workspacePath = process.cwd();
+        if (taskId) {
+          const meta = taskMeta.get(taskId);
+          if (meta && meta.workspacePath) {
+            workspacePath = meta.workspacePath;
+          }
+        }
+
+        const guard = new ProjectGuard(workspacePath);
         const before = await guard.readFile(filePath).catch(() => "");
         const diff = simpleDiff(before, content);
         return sendJson(res, 200, { diff, before, after: content });
@@ -482,29 +499,44 @@ async function runTaskSequential(task) {
 
   for (const step of task.steps) {
     step.status = "running";
-    const result = await orchestrator.runStep(task, step, workspaceGuard);
-    results.push({ stepId: step.id, result });
-    broadcast({ type: "step-result", taskId: task.id, stepId: step.id, result });
-    if (result.commandResult && result.commandResult.status === "needs-approval") {
-      const entry = {
-        id: result.commandResult.id,
-        command: step.command,
-        severity: result.commandResult.severity,
-        taskId: task.id,
-        stepId: step.id,
-      };
-      addPendingCommand(entry);
-      step.status = "paused";
-      pending.push(entry);
-      break; // halt until approval
-    } else if (result.commandResult && result.commandResult.status === "blocked") {
+    console.log(`\n[Task ${task.id}] ═══ STEP ${step.id} ═══`);
+    console.log(`[Task ${task.id}] Intent: ${step.intent}`);
+    console.log(`[Task ${task.id}] Apply: ${step.apply?.type} → ${step.apply?.path || 'N/A'}`);
+
+    try {
+      const result = await orchestrator.runStep(task, step, workspaceGuard);
+      results.push({ stepId: step.id, result });
+      console.log(`[Task ${task.id}] ✓ Step ${step.id} completed successfully`);
+      broadcast({ type: "step-result", taskId: task.id, stepId: step.id, result });
+
+      if (result.commandResult && result.commandResult.status === "needs-approval") {
+        const entry = {
+          id: result.commandResult.id,
+          command: step.command,
+          severity: result.commandResult.severity,
+          taskId: task.id,
+          stepId: step.id,
+        };
+        addPendingCommand(entry);
+        step.status = "paused";
+        pending.push(entry);
+        break; // halt until approval
+      } else if (result.commandResult && result.commandResult.status === "blocked") {
+        step.status = "failed";
+        stateStore.updateSection("log", (prev = []) => [
+          ...prev,
+          { event: "command-blocked", taskId: task.id, stepId: step.id, command: step.command, ts: Date.now() },
+        ]);
+        pending.push({ blocked: true, command: step.command });
+        break;
+      }
+    } catch (stepError) {
+      // Step failed - log it and continue with next step
+      console.error(`[Task ${task.id}] Step ${step.id} failed:`, stepError.message);
       step.status = "failed";
-      stateStore.updateSection("log", (prev = []) => [
-        ...prev,
-        { event: "command-blocked", taskId: task.id, stepId: step.id, command: step.command, ts: Date.now() },
-      ]);
-      pending.push({ blocked: true, command: step.command });
-      break;
+      results.push({ stepId: step.id, error: stepError.message });
+      broadcast({ type: "step-failed", taskId: task.id, stepId: step.id, error: stepError.message });
+      // Continue with next step instead of breaking
     }
   }
   if (!pending.length) task.status = "completed";

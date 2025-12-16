@@ -30,7 +30,7 @@ class OpenAIProvider {
       messages: [{ role: "user", content: prompt }],
     };
 
-    console.log(`[OpenAI] Generating with model: ${this.model}`);
+    console.log(`[OpenAI →] REQUEST: ${this.model} | prompt: ${prompt.substring(0, 80)}...`);
 
     if (fixedTemperature) {
         // Models with fixed temperature=1 (reasoning models, gpt-4.1, gpt-5)
@@ -75,8 +75,11 @@ class OpenAIProvider {
 
     // Debug logging
     if (!content) {
-      console.error("[OpenAI] Empty response received!");
+      console.error("[OpenAI ✗] RESPONSE: Empty!");
       console.error("[OpenAI] Full response:", JSON.stringify(json, null, 2));
+    } else {
+      const preview = content.substring(0, 100).replace(/\n/g, ' ');
+      console.log(`[OpenAI ←] RESPONSE: ${content.length} chars | "${preview}..."`);
     }
 
     return content;

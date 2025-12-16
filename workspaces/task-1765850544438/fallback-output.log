@@ -1,5 +1,0 @@
-```bash
-mkdir -p /Users/tom/Projects/Ultracode/workspaces/task-1765850544438
-cd /Users/tom/Projects/Ultracode/workspaces/task-1765850544438
-echo "<!DOCTYPE html><html><head><title>Meine Website</title></head><body><h1>Willkommen auf meiner Website</h1></body></html>" > index.html
-```

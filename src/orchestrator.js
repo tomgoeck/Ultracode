@@ -32,13 +32,27 @@ class Orchestrator {
     const stateSlice = (step.stateRefs || [])
       .map((ref) => `${ref}: ${JSON.stringify(state[ref], null, 2)}`)
       .join("\n");
+
+    // Determine what type of output is expected
+    let outputInstruction = "Return the complete output for this step.";
+    if (step.apply?.type === "writeFile") {
+      outputInstruction = `Generate the COMPLETE FILE CONTENT for the file. DO NOT generate shell commands like "mkdir" or "touch". Generate the actual code/text that should be inside the file.`;
+    } else if (step.apply?.type === "appendFile") {
+      outputInstruction = "Generate ONLY the content to append to the existing file. No shell commands.";
+    }
+
     return [
       `Task: ${task.title}`,
       `Goal: ${task.goal}`,
       `Step Intent: ${step.intent}`,
       `State:\n${stateSlice || "(empty)"}`,
-      `Instruction: Return the minimal code/action needed for this single step only.`,
-    ].join("\n\n");
+      ``,
+      `IMPORTANT INSTRUCTIONS:`,
+      `- ${outputInstruction}`,
+      `- NEVER generate shell commands (mkdir, touch, npm install, etc.) - only file content`,
+      `- If creating a file, return the full code/text content, not commands`,
+      `- Keep output focused and minimal for this single step`,
+    ].join("\n");
   }
 
   /**

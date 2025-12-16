@@ -43,11 +43,18 @@ Return a JSON object with this structure:
 }
 
 Rules for 'apply':
-1. For file creation or full content replacement, use apply: { "type": "writeFile", "path": "filename.ext" }. The agent will be instructed to generate the *full file content*.
-2. For appending content to an existing file, use apply: { "type": "appendFile", "path": "filename.ext" }. The agent will be instructed to generate *only the content to append*.
-3. If 'apply' is missing, the agent's output will only be stored in the state.
-4. The 'intent' should clearly describe what the sub-agent should produce for the 'apply' action.
-5. The 'path' in 'apply' must be relative to the project root (e.g., 'index.html', 'src/main.js').
+1. For file creation or full content replacement, use apply: { "type": "writeFile", "path": "filename.ext" }.
+   - The 'intent' MUST instruct the agent to generate the COMPLETE FILE CONTENT (e.g., "Generate complete HTML file for homepage")
+   - The agent will produce the actual file content, NOT shell commands, NOT file paths
+   - Example: intent="Create index.html with basic structure", apply={type:"writeFile", path:"index.html"}
+   - Directories are created AUTOMATICALLY - you only specify FILES
+2. For appending content to an existing file, use apply: { "type": "appendFile", "path": "filename.ext" }.
+   - The agent will generate ONLY the content to append
+3. NEVER create steps to "create folders" or "initialize directories" - folders are created automatically when files are written
+4. NEVER use apply types other than "writeFile" or "appendFile" - NO "verify", "command", or custom types
+5. NEVER instruct the agent to generate shell commands like "mkdir", "touch", "npm install" - those are execution commands, not file content
+6. If 'apply' is missing, the agent's output will only be stored in the state.
+7. The 'path' in 'apply' must be relative to the project root and MUST include a file extension (e.g., 'index.html', 'src/main.js', 'README.md', 'css/styles.css').
 
 Rules:
 1. Start with a plan/summary step if complex.

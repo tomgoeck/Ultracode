@@ -366,40 +366,94 @@ const app = {
         if (!this.state.activeProject) return;
         const treeContainer = document.getElementById('file-tree');
         treeContainer.innerHTML = '<div class="text-gray-500 italic">Loading files...</div>';
-        
+
         try {
             const res = await fetch(`/api/workspace/tree?taskId=${this.state.activeProject}`);
             const data = await res.json();
-            
-            if (data.tree) {
+
+            if (data.tree && data.tree.length > 0) {
+                const fileCount = data.tree.filter(f => !f.isDir).length;
                 const html = data.tree.map(f => {
                     const icon = f.isDir ? '📁' : '📄';
-                    const click = f.isDir ? '' : `onclick="app.viewFile('${f.path}')"`;
-                    const cursor = f.isDir ? '' : 'cursor-pointer hover:text-blue-300';
-                    return `<div class="py-1 ${cursor}" ${click}>${icon} ${f.name}</div>`;
+                    const click = f.isDir ? '' : `onclick="app.viewFile('${f.path.replace(/'/g, "\\'")}')"`;
+                    const cursor = f.isDir ? 'text-gray-500' : 'cursor-pointer hover:text-blue-300';
+                    const indent = f.path.split('/').length > 1 ? 'pl-' + (f.path.split('/').length - 1) * 2 : '';
+                    return `<div class="py-1 ${cursor} ${indent}" ${click}>${icon} ${f.name}</div>`;
                 }).join('');
-                treeContainer.innerHTML = html;
+                treeContainer.innerHTML = `<div class="text-gray-500 text-[10px] mb-2 border-b border-gray-700 pb-1">${fileCount} files</div>` + html;
+            } else {
+                treeContainer.innerHTML = '<div class="text-gray-500 italic">No files generated yet</div>';
             }
         } catch(e) {
+            console.error('Failed to load file tree:', e);
             treeContainer.innerHTML = '<div class="text-red-400">Failed to load files</div>';
         }
     },
 
     async viewFile(path) {
         const viewer = document.getElementById('code-viewer');
-        viewer.innerText = "Loading...";
+        viewer.innerHTML = '<div class="text-gray-500 italic p-4">Loading...</div>';
+
         try {
-            // We use the diff preview endpoint as a generic file reader for now
+            // Fetch file content with taskId
             const res = await fetch('/api/tasks/preview-diff', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({ path, content: "" }) // content empty means we just want 'before' usually, but let's use a simpler read endpoint if strictly needed. 
-                // Actually server.js preview-diff returns 'before' which is the current file content.
+                body: JSON.stringify({
+                    path,
+                    content: "",
+                    taskId: this.state.activeProject
+                })
             });
             const data = await res.json();
-            viewer.innerText = data.before || "(Empty file)";
+
+            if (data.before !== undefined) {
+                const content = data.before || "(Empty file)";
+
+                // Detect language from file extension
+                const ext = path.split('.').pop().toLowerCase();
+                const langMap = {
+                    'js': 'javascript',
+                    'jsx': 'javascript',
+                    'ts': 'typescript',
+                    'tsx': 'typescript',
+                    'html': 'xml',
+                    'css': 'css',
+                    'json': 'json',
+                    'py': 'python',
+                    'rb': 'ruby',
+                    'java': 'java',
+                    'cpp': 'cpp',
+                    'c': 'c',
+                    'md': 'markdown',
+                    'sh': 'bash',
+                    'yml': 'yaml',
+                    'yaml': 'yaml',
+                    'xml': 'xml',
+                    'sql': 'sql',
+                    'go': 'go',
+                    'rs': 'rust',
+                    'php': 'php',
+                    'swift': 'swift',
+                    'kt': 'kotlin',
+                };
+                const language = langMap[ext] || 'plaintext';
+
+                // Create code element with language class
+                viewer.innerHTML = `<code class="language-${language}"></code>`;
+                const codeEl = viewer.querySelector('code');
+                codeEl.textContent = content;
+
+                // Apply syntax highlighting
+                if (window.hljs) {
+                    hljs.highlightElement(codeEl);
+                }
+            } else {
+                viewer.innerHTML = '<div class="text-red-400 p-4">Error: Could not read file</div>';
+            }
         } catch(e) {
-            viewer.innerText = "Error reading file";
+            console.error('Error reading file:', e);
+            viewer.innerHTML = '<div class="text-red-400 p-4">Error reading file</div>';
         }
     },
 

@@ -39,6 +39,36 @@ class RedFlagger {
           redFlags.push("invalid-json");
         }
       }
+      // Check for shell commands (common mistake)
+      if (rule.noShellCommands !== false) { // Default: check for shell commands
+        const shellCommands = ['mkdir', 'touch', 'npm install', 'npm init', 'cd ', 'ls ', 'echo ', 'git ', 'cp ', 'mv ', 'rm '];
+        const trimmed = output.trim().toLowerCase();
+        for (const cmd of shellCommands) {
+          if (trimmed.startsWith(cmd)) {
+            redFlags.push(`shell-command:${cmd.trim()}`);
+            break;
+          }
+        }
+      }
+      // Check for instruction lists instead of actual code/content
+      if (rule.noInstructionLists !== false) { // Default: check for instruction lists
+        const lines = output.trim().split('\n');
+        const firstFewLines = lines.slice(0, 5).join('\n').toLowerCase();
+        // Patterns that indicate instructions rather than code
+        const instructionPatterns = [
+          /^\s*1\.\s+(create|add|open|install|run|start|build|make|write)/,
+          /^\s*step\s+1/,
+          /^\s*first,?\s+(create|add|open|install)/,
+          /^\s*to\s+(create|build|make|start)/,
+          /files?:\s*$/i,  // "Files:" at end of line (common in instruction lists)
+        ];
+        for (const pattern of instructionPatterns) {
+          if (pattern.test(firstFewLines)) {
+            redFlags.push('instruction-list');
+            break;
+          }
+        }
+      }
     }
     return redFlags;
   }

@@ -1,1 +1,0 @@
-Create a JavaScript file named 'script.js' in the project directory.

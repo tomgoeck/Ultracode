@@ -36,7 +36,17 @@ class ProjectGuard {
   async writeFile(relPath, content, options = {}) {
     const { dryRun = false } = options;
     const full = this.resolveSafe(relPath);
-    await fs.promises.mkdir(path.dirname(full), { recursive: true });
+
+    // Create parent directory if needed
+    try {
+      await fs.promises.mkdir(path.dirname(full), { recursive: true });
+    } catch (err) {
+      // Ignore EEXIST - directory already exists, which is fine
+      if (err.code !== 'EEXIST') {
+        throw err;
+      }
+    }
+
     let before = null;
     try {
       before = await fs.promises.readFile(full, "utf8");

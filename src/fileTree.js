@@ -1,16 +1,25 @@
 const fs = require("fs");
 const path = require("path");
 
-function listFiles(root, relative = ".") {
+function listFiles(root, relative = ".", flat = true) {
   const dir = path.resolve(root, relative);
   const entries = fs.readdirSync(dir, { withFileTypes: true });
   const result = [];
+
   for (const e of entries) {
     const relPath = path.join(relative, e.name);
+    const name = e.name;
+
     if (e.isDirectory()) {
-      result.push({ path: relPath, type: "dir", children: listFiles(root, relPath) });
+      result.push({ path: relPath, name, isDir: true });
+      if (flat) {
+        // Recursively add children to flat list
+        const children = listFiles(root, relPath, flat);
+        result.push(...children);
+      }
     } else {
-      result.push({ path: relPath, type: "file", size: fs.statSync(path.join(root, relPath)).size });
+      const size = fs.statSync(path.join(root, relPath)).size;
+      result.push({ path: relPath, name, isDir: false, size });
     }
   }
   return result;
