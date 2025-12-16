@@ -1,0 +1,306 @@
+{
+  "projects": [
+    [
+      "project-1765848846475",
+      {
+        "id": "project-1765848846475",
+        "name": "Unicorn Website",
+        "agentModel": "openai:gpt-3.5-turbo",
+        "voteModel": "openai:gpt-3.5-turbo",
+        "createdAt": 1765848846475,
+        "tasks": []
+      }
+    ],
+    [
+      "project-1765849190737",
+      {
+        "id": "project-1765849190737",
+        "name": "Unicorn Website",
+        "agentModel": "openai:gpt-3.5-turbo",
+        "voteModel": "openai:gpt-3.5-turbo",
+        "createdAt": 1765849190737,
+        "tasks": []
+      }
+    ],
+    [
+      "project-1765849288564",
+      {
+        "id": "project-1765849288564",
+        "name": "Unicorn Website",
+        "agentModel": "openai:gpt-3.5-turbo",
+        "voteModel": "openai:gpt-3.5-turbo",
+        "createdAt": 1765849288564,
+        "tasks": []
+      }
+    ],
+    [
+      "project-1765849442041",
+      {
+        "id": "project-1765849442041",
+        "name": "Unicorn Website",
+        "agentModel": "openai:gpt-3.5-turbo",
+        "voteModel": "openai:gpt-3.5-turbo",
+        "createdAt": 1765849442041,
+        "tasks": []
+      }
+    ],
+    [
+      "project-1765849501088",
+      {
+        "id": "project-1765849501088",
+        "name": "dadas",
+        "agentModel": "openai:gpt-3.5-turbo",
+        "voteModel": "openai:gpt-3.5-turbo",
+        "createdAt": 1765849501088,
+        "tasks": []
+      }
+    ],
+    [
+      "project-1765849609099",
+      {
+        "id": "project-1765849609099",
+        "name": "Unicorn Website",
+        "agentModel": "openai:gpt-3.5-turbo",
+        "voteModel": "openai:gpt-3.5-turbo",
+        "createdAt": 1765849609099,
+        "tasks": [
+          "task-1765849609104"
+        ]
+      }
+    ],
+    [
+      "project-1765849737840",
+      {
+        "id": "project-1765849737840",
+        "name": "Unicorn Website",
+        "agentModel": "openai:gpt-3.5-turbo",
+        "voteModel": "openai:gpt-3.5-turbo",
+        "createdAt": 1765849737840,
+        "tasks": [
+          "task-1765849737844"
+        ]
+      }
+    ],
+    [
+      "project-1765849866529",
+      {
+        "id": "project-1765849866529",
+        "name": "Unicorn Website",
+        "agentModel": "openai:gpt-3.5-turbo",
+        "voteModel": "openai:gpt-3.5-turbo",
+        "createdAt": 1765849866529,
+        "tasks": [
+          "task-1765849866538"
+        ]
+      }
+    ],
+    [
+      "project-1765850035928",
+      {
+        "id": "project-1765850035928",
+        "name": "Unicorn Website",
+        "agentModel": "openai:gpt-5-mini",
+        "voteModel": "openai:gpt-4.1-mini",
+        "createdAt": 1765850035928,
+        "tasks": []
+      }
+    ],
+    [
+      "project-1765850169364",
+      {
+        "id": "project-1765850169364",
+        "name": "Unicorn Website",
+        "agentModel": "openai:gpt-5-mini",
+        "voteModel": "openai:gpt-4.1-mini",
+        "createdAt": 1765850169364,
+        "tasks": []
+      }
+    ],
+    [
+      "project-1765850183142",
+      {
+        "id": "project-1765850183142",
+        "name": "Unicorn Website",
+        "agentModel": "openai:gpt-5-mini",
+        "voteModel": "openai:gpt-4.1-mini",
+        "createdAt": 1765850183143,
+        "tasks": []
+      }
+    ],
+    [
+      "project-1765850255151",
+      {
+        "id": "project-1765850255151",
+        "name": "Unicorn Website",
+        "agentModel": "openai:gpt-5-mini",
+        "voteModel": "openai:gpt-4.1-mini",
+        "createdAt": 1765850255151,
+        "tasks": []
+      }
+    ],
+    [
+      "project-1765850305700",
+      {
+        "id": "project-1765850305700",
+        "name": "Unicorn Website",
+        "agentModel": "openai:gpt-5-mini",
+        "voteModel": "openai:gpt-3.5-turbo",
+        "createdAt": 1765850305700,
+        "tasks": []
+      }
+    ],
+    [
+      "project-1765850324465",
+      {
+        "id": "project-1765850324465",
+        "name": "Unicorn Website",
+        "agentModel": "openai:gpt-5-mini",
+        "voteModel": "openai:gpt-3.5-turbo",
+        "createdAt": 1765850324465,
+        "tasks": []
+      }
+    ],
+    [
+      "project-1765850401866",
+      {
+        "id": "project-1765850401866",
+        "name": "Unicorn Website",
+        "agentModel": "openai:gpt-5-mini",
+        "voteModel": "openai:gpt-4.1-mini",
+        "createdAt": 1765850401866,
+        "tasks": [
+          "task-1765850401870"
+        ]
+      }
+    ],
+    [
+      "project-1765850544435",
+      {
+        "id": "project-1765850544435",
+        "name": "Neues Projekt",
+        "agentModel": "openai:gpt-5-mini",
+        "voteModel": "openai:gpt-4.1-mini",
+        "createdAt": 1765850544435,
+        "tasks": [
+          "task-1765850544438"
+        ]
+      }
+    ],
+    [
+      "project-1765850718989",
+      {
+        "id": "project-1765850718989",
+        "name": "Einhörner",
+        "agentModel": "openai:gpt-3.5-turbo",
+        "voteModel": "openai:gpt-3.5-turbo",
+        "createdAt": 1765850718989,
+        "tasks": [
+          "task-1765850718994"
+        ]
+      }
+    ],
+    [
+      "project-1765850913044",
+      {
+        "id": "project-1765850913044",
+        "name": "Website",
+        "agentModel": "openai:gpt-5-mini",
+        "voteModel": "openai:gpt-4.1-mini",
+        "createdAt": 1765850913044,
+        "tasks": [
+          "task-1765850913048"
+        ]
+      }
+    ],
+    [
+      "project-1765878660578",
+      {
+        "id": "project-1765878660578",
+        "name": "Einhörner Neu",
+        "agentModel": "openai:gpt-3.5-turbo",
+        "voteModel": "openai:gpt-3.5-turbo",
+        "createdAt": 1765878660579,
+        "tasks": [
+          "task-1765878660608"
+        ]
+      }
+    ]
+  ],
+  "tasks": [
+    [
+      "task-1765849609104",
+      {
+        "id": "task-1765849609104",
+        "title": "Initial Setup: Unicorn Website",
+        "projectId": "project-1765849609099",
+        "status": "pending",
+        "createdAt": 1765849612380
+      }
+    ],
+    [
+      "task-1765849737844",
+      {
+        "id": "task-1765849737844",
+        "title": "Initial Setup: Unicorn Website",
+        "status": "completed",
+        "workspacePath": "/Users/tom/Projects/Ultracode/workspaces/task-1765849737844"
+      }
+    ],
+    [
+      "task-1765849866538",
+      {
+        "id": "task-1765849866538",
+        "title": "Initial Setup: Unicorn Website",
+        "status": "completed",
+        "workspacePath": "/Users/tom/Projects/Ultracode/workspaces/task-1765849866538"
+      }
+    ],
+    [
+      "task-1765850401870",
+      {
+        "id": "task-1765850401870",
+        "title": "Initial Setup: Unicorn Website",
+        "status": "completed",
+        "workspacePath": "/Users/tom/Projects/Ultracode/workspaces/task-1765850401870"
+      }
+    ],
+    [
+      "task-1765850544438",
+      {
+        "id": "task-1765850544438",
+        "title": "Initial Setup: Neues Projekt",
+        "status": "completed",
+        "workspacePath": "/Users/tom/Projects/Ultracode/workspaces/task-1765850544438"
+      }
+    ],
+    [
+      "task-1765850718994",
+      {
+        "id": "task-1765850718994",
+        "title": "Initial Setup: Einhörner",
+        "projectId": "project-1765850718989",
+        "status": "pending",
+        "createdAt": 1765850723190
+      }
+    ],
+    [
+      "task-1765850913048",
+      {
+        "id": "task-1765850913048",
+        "title": "Initial Setup: Website",
+        "status": "completed",
+        "workspacePath": "/Users/tom/Projects/Ultracode/workspaces/task-1765850913048"
+      }
+    ],
+    [
+      "task-1765878660608",
+      {
+        "id": "task-1765878660608",
+        "title": "Initial Setup: Einhörner Neu",
+        "projectId": "project-1765878660578",
+        "status": "pending",
+        "createdAt": 1765878664667
+      }
+    ]
+  ]
+}

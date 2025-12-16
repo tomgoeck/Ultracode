@@ -10,11 +10,16 @@ const { Orchestrator } = require("./orchestrator");
 const { ProjectGuard } = require("./projectGuard");
 const { createProvider } = require("./providerFactory");
 const { ConfigStore } = require("./configStore");
-const { planTask } = require("./planner");
+const { createPlan } = require("./planner");
 const { AuditLogger } = require("./auditLogger");
 const { PendingStore } = require("./pendingStore");
 const { simpleDiff } = require("./diffUtil");
 const { listFiles } = require("./fileTree");
+const { PromptParaphraser } = require("./promptParaphraser");
+const { ResourceMonitor } = require("./resourceMonitor");
+const { VotingEngine } = require("./votingEngine");
+const { RedFlagger } = require("./redFlagger");
+const { GitCommitter } = require("./gitCommitter");
 
 // Persistent config and in-memory state
 const configStore = new ConfigStore(path.join(process.cwd(), "data", "config.json"));
@@ -28,13 +33,23 @@ const stateStore = new StateStore({
   pendingCommands: [],
   tasks: [],
 });
-const taskMeta = new Map();
 const taskQueue = new TaskQueue();
 const commandRunner = new CommandRunner({
   safetyMode: configStore.getSetting("safetyMode", "ask"),
   allowlist: configStore.getSetting("allowlist", []),
   denylist: configStore.getSetting("denylist", []),
 });
+
+// Initialize MAKER components (paraphraser for error decorrelation, resource monitor for cost tracking)
+const resourceMonitor = new ResourceMonitor();
+const paraphraser = new PromptParaphraser(llms, "gpt-4o-mini"); // Use cheap model for paraphrasing
+const gitCommitter = new GitCommitter(process.cwd()); // Auto-commit task completions
+const votingEngine = new VotingEngine({
+  redFlagger: new RedFlagger(),
+  paraphraser,
+  resourceMonitor,
+});
+
 const orchestrator = new Orchestrator({
   llmRegistry: llms,
   stateStore,
@@ -42,12 +57,50 @@ const orchestrator = new Orchestrator({
   projectGuard: new ProjectGuard(process.cwd()),
   auditLogger,
   eventEmitter: { emit: (ev) => broadcast(ev) },
+  votingEngine,
 });
 const pendingCommands = new Map(pendingStore.list().map((c) => [c.id, c]));
 if (pendingCommands.size) {
   stateStore.updateSection("pendingCommands", () => Array.from(pendingCommands.values()));
 }
 const sseClients = new Set();
+
+// Task/Project Persistence
+const TASKS_FILE = path.join(process.cwd(), "data", "tasks.json");
+const projects = new Map(); // projectId -> project metadata
+let taskMeta = new Map(); // taskId -> task metadata
+const activeTasks = new Map(); // taskId -> full task object (in-memory only)
+
+function saveTasks() {
+  const data = {
+    projects: Array.from(projects.entries()),
+    tasks: Array.from(taskMeta.entries()),
+  };
+  fs.mkdirSync(path.dirname(TASKS_FILE), { recursive: true });
+  fs.writeFileSync(TASKS_FILE, JSON.stringify(data, null, 2), "utf8");
+}
+
+function loadTasks() {
+  try {
+    const data = JSON.parse(fs.readFileSync(TASKS_FILE, "utf8"));
+    if (data.projects) {
+      projects.clear();
+      data.projects.forEach(([id, proj]) => projects.set(id, proj));
+    }
+    if (data.tasks) {
+      taskMeta.clear();
+      data.tasks.forEach(([id, task]) => taskMeta.set(id, task));
+    }
+    console.log(`[Persistence] Loaded ${projects.size} projects, ${taskMeta.size} tasks`);
+  } catch (e) {
+    if (e.code !== 'ENOENT') {
+      console.error('Error loading tasks file:', e);
+    }
+  }
+}
+
+// Load persisted tasks on startup
+loadTasks();
 
 // Load providers from config
 for (const cfg of configStore.listProviders()) {
@@ -162,16 +215,59 @@ async function handleApi(req, res) {
         return sendJson(res, 200, { ok: true, allowlist, denylist });
       }
 
+      // Config/Keys Endpoints
+      if (url.pathname === "/api/config/keys" && req.method === "GET") {
+        return sendJson(res, 200, { keys: configStore.getKeys() });
+      }
+
+      if (url.pathname === "/api/config/keys" && req.method === "POST") {
+        const { keys } = body;
+        if (!keys || typeof keys !== 'object') {
+          return sendJson(res, 400, { error: "keys object required" });
+        }
+        // Save each key
+        for (const [providerId, key] of Object.entries(keys)) {
+          if (key) configStore.setKey(providerId, key);
+        }
+        return sendJson(res, 200, { ok: true });
+      }
+
+      // Projects Endpoints
+      if (url.pathname === "/api/projects/create" && req.method === "POST") {
+        const { name, agentModel, voteModel } = body;
+        if (!name) return sendJson(res, 400, { error: "name required" });
+
+        const projectId = `project-${Date.now()}`;
+        const project = {
+          id: projectId,
+          name,
+          agentModel,
+          voteModel,
+          createdAt: Date.now(),
+          tasks: [],
+        };
+
+        projects.set(projectId, project);
+        saveTasks();
+
+        return sendJson(res, 200, { ok: true, project });
+      }
+
+      if (url.pathname === "/api/projects" && req.method === "GET") {
+        return sendJson(res, 200, { projects: Array.from(projects.values()) });
+      }
+
       if (url.pathname === "/api/tasks/run-demo" && req.method === "POST") {
         const { model, voteModel } = body;
         if (!model) return sendJson(res, 400, { error: "model required" });
-        const task = planTask({
+        const task = await createPlan({
           id: `task-${Date.now()}`,
           title: "Demo: greeting + write log",
           goal: "Produce a greeting line and write it to out/demo.log",
           model,
           voteModel: voteModel || model,
           filePath: "out/demo.log",
+          llmRegistry: llms,
         });
         taskQueue.add(task);
         const { results, pending } = await runTaskSequential(task);
@@ -185,31 +281,109 @@ async function handleApi(req, res) {
       }
 
       if (url.pathname === "/api/tasks/create" && req.method === "POST") {
-        const { title, goal, model, voteModel, filePath } = body;
+        const { title, goal, model, voteModel, filePath, k, nSamples, temperature, redFlags, projectId } = body;
         if (!title || !goal || !model) {
           return sendJson(res, 400, { error: "title, goal, model required" });
         }
-        const task = planTask({
+
+        // Parse "provider:model" format and ensure provider is registered
+        const ensureProvider = (modelStr) => {
+          if (!modelStr.includes(':')) return modelStr; // Already a provider name
+
+          const [providerType, modelName] = modelStr.split(':', 2);
+          const providerKey = `${providerType}:${modelName}`;
+
+          // Check if already registered
+          if (llms.has(providerKey)) return providerKey;
+
+          // Get API key from config
+          const keys = configStore.getKeys();
+          const apiKey = keys[providerType];
+
+          // Create and register provider
+          const cfg = {
+            name: providerKey,
+            type: providerType,
+            apiKey,
+            model: modelName,
+          };
+          llms.register(providerKey, createProvider(cfg));
+          return providerKey;
+        };
+
+        const agentProvider = ensureProvider(model);
+        const voterProvider = voteModel ? ensureProvider(voteModel) : agentProvider;
+
+        const task = await createPlan({
           id: `task-${Date.now()}`,
           title,
           goal,
-          model,
-          voteModel: voteModel || model,
+          model: agentProvider,
+          voteModel: voterProvider,
           filePath: filePath || "out/output.txt",
+          llmRegistry: llms,
+          // MAKER parameters
+          k: k || 2,
+          nSamples: nSamples || 3,
+          temperature: temperature !== undefined ? temperature : 0.2,
+          redFlags: redFlags || [],
         });
+        task.projectId = projectId; // Associate with project
         taskQueue.add(task);
-        const { results, pending } = await runTaskSequential(task);
+
+        // Save full task in activeTasks for live updates
+        activeTasks.set(task.id, task);
+
+        // Save task metadata immediately
+        taskMeta.set(task.id, {
+          id: task.id,
+          title: task.title,
+          projectId: projectId,
+          status: "pending",
+          createdAt: Date.now(),
+        });
+
+        // Add to project's task list
+        if (projectId && projects.has(projectId)) {
+          const project = projects.get(projectId);
+          project.tasks.push(task.id);
+          projects.set(projectId, project);
+        }
+
+        saveTasks();
+
+        // Return immediately and run task in background
+        setImmediate(() => {
+          runTaskSequential(task).catch(err => {
+            console.error(`[Task ${task.id}] Execution failed:`, err);
+          });
+        });
+
         return sendJson(res, 200, {
           ok: true,
           taskId: task.id,
-          results,
-          pendingCommands: pending,
-          state: stateStore.snapshot(),
+          steps: task.steps.map(s => ({ id: s.id, intent: s.intent, status: s.status })),
         });
       }
 
       if (url.pathname === "/api/tasks" && req.method === "GET") {
         return sendJson(res, 200, { tasks: Array.from(taskMeta.values()) });
+      }
+
+      if (url.pathname === "/api/tasks/details" && req.method === "GET") {
+        const taskId = url.searchParams.get("taskId");
+        if (!taskId) return sendJson(res, 400, { error: "taskId required" });
+
+        // Check activeTasks first (running/recent tasks with full details)
+        const activeTask = activeTasks.get(taskId);
+        if (activeTask) {
+          return sendJson(res, 200, { task: activeTask });
+        }
+
+        // Fall back to metadata
+        const taskMetadata = taskMeta.get(taskId);
+        if (!taskMetadata) return sendJson(res, 404, { error: "task not found" });
+        return sendJson(res, 200, { task: taskMetadata });
       }
 
       if (url.pathname === "/api/workspace/tree" && req.method === "GET") {
@@ -260,8 +434,27 @@ async function handleApi(req, res) {
         return sendJson(res, 200, { diff, before, after: content });
       }
 
+      // Resource Monitoring Endpoints
+      if (url.pathname === "/api/metrics/task" && req.method === "GET") {
+        const taskId = url.searchParams.get("taskId");
+        if (!taskId) return sendJson(res, 400, { error: "taskId required" });
+        const metrics = resourceMonitor.getTaskMetrics(taskId);
+        return sendJson(res, 200, metrics || { error: "not found" });
+      }
+
+      if (url.pathname === "/api/metrics/all" && req.method === "GET") {
+        const metrics = resourceMonitor.getAllMetrics();
+        return sendJson(res, 200, { tasks: metrics });
+      }
+
+      if (url.pathname === "/api/metrics/summary" && req.method === "GET") {
+        const summary = resourceMonitor.getSummary();
+        return sendJson(res, 200, summary);
+      }
+
       sendJson(res, 404, { error: "not found" });
     } catch (err) {
+      console.error("[API Error]", err);
       sendJson(res, 500, { error: err.message });
     }
   });
@@ -315,10 +508,27 @@ async function runTaskSequential(task) {
     }
   }
   if (!pending.length) task.status = "completed";
+
+  // Auto-commit task completion to git (MAKER requirement)
+  if (task.status === "completed") {
+    const commitResult = await gitCommitter.commitTaskCompletion(task, results);
+    if (commitResult.committed) {
+      console.log(`[GitCommitter] Committed task ${task.id}: ${commitResult.changedFiles} files`);
+      stateStore.updateSection("log", (prev = []) => [
+        ...prev,
+        { event: "git-commit", taskId: task.id, commitResult, ts: Date.now() },
+      ]);
+      auditLogger.log({ event: "git-commit", taskId: task.id, commitResult, ts: Date.now() });
+    } else if (commitResult.reason !== "no-git-repo" && commitResult.reason !== "no-changes") {
+      console.warn(`[GitCommitter] Failed to commit task ${task.id}: ${commitResult.reason || commitResult.error}`);
+    }
+  }
+
   stateStore.updateSection("tasks", (prev = []) =>
     prev.map((t) => (t.id === task.id ? { ...t, status: task.status } : t))
   );
   taskMeta.set(task.id, { ...taskMeta.get(task.id), status: task.status });
+  saveTasks(); // Persist task completion
   return { results, pending };
 }
 

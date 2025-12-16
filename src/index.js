@@ -4,7 +4,7 @@ const { TaskQueue } = require("./taskQueue");
 const { CommandRunner } = require("./executionGuard");
 const { Orchestrator } = require("./orchestrator");
 const { ProjectGuard } = require("./projectGuard");
-const { planTask } = require("./planner");
+const { createPlan } = require("./planner");
 
 async function main() {
   const llms = new LLMRegistry();
@@ -26,13 +26,14 @@ async function main() {
     projectGuard,
   });
 
-  const task = planTask({
+  const task = await createPlan({
     id: "task-demo",
     title: "Demo: create greeting and write log",
     goal: "Produce a greeting line and write it to out/demo.log",
     model: "echo-strong",
     voteModel: "echo-vote",
     filePath: "out/demo.log",
+    llmRegistry: llms
   });
 
   taskQueue.add(task);

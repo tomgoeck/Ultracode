@@ -46,7 +46,14 @@ class GeminiProvider {
       throw new Error(`Gemini listModels failed: ${res.status} ${text}`);
     }
     const json = await res.json();
-    return (json.models || []).map((m) => m.name);
+    return (json.models || [])
+        .filter(m => {
+            const name = m.name.toLowerCase();
+            const isVersioned = /-00\d$/.test(name) || /-latest$/.test(name);
+            return name.includes("gemini") && !name.includes("embedding") && !isVersioned;
+        })
+        .map((m) => m.name.replace("models/", "")) // remove 'models/' prefix for cleaner UI
+        .sort();
   }
 }
 

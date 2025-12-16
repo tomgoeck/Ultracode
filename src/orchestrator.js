@@ -60,6 +60,10 @@ class Orchestrator {
         k: step.k || task.k,
         nSamples: step.nSamples || task.nSamples,
         redFlagRules: step.redFlags || task.redFlags,
+        temperature: step.temperature || task.temperature || 0.2,
+        taskId: task.id,
+        stepId: step.id,
+        voteModel: providerName, // Pass vote model for paraphrasing
       });
     } catch (err) {
       step.status = "failed";

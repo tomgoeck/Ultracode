@@ -12,12 +12,52 @@ class OpenAIProvider {
 
   async generate(prompt, options = {}) {
     if (!this.apiKey) throw new Error("OpenAI API key missing");
+
+    const isReasoningModel = this.model.startsWith("o1") || this.model.startsWith("o3");
+    // Models that only support temperature=1
+    const fixedTemperature = isReasoningModel ||
+                            this.model.includes("gpt-4.1") ||
+                            this.model.includes("gpt-5");
+    // New models (gpt-4o, gpt-4.1, gpt-5, gpt-4-turbo) use max_completion_tokens
+    const usesCompletionTokens = isReasoningModel ||
+                                  this.model.includes("gpt-4o") ||
+                                  this.model.includes("gpt-4.1") ||
+                                  this.model.includes("gpt-5") ||
+                                  this.model.includes("gpt-4-turbo");
+
     const body = {
       model: this.model,
       messages: [{ role: "user", content: prompt }],
-      temperature: options.temperature ?? 0.2,
-      max_tokens: options.maxTokens ?? 512,
     };
+
+    console.log(`[OpenAI] Generating with model: ${this.model}`);
+
+    if (fixedTemperature) {
+        // Models with fixed temperature=1 (reasoning models, gpt-4.1, gpt-5)
+        if (options.maxTokens && usesCompletionTokens) {
+          body.max_completion_tokens = options.maxTokens;
+        } else if (options.maxTokens) {
+          body.max_tokens = options.maxTokens;
+        }
+        body.temperature = 1;
+    } else if (usesCompletionTokens) {
+        // Newer models (gpt-4o, gpt-4o-mini, gpt-4-turbo) use max_completion_tokens
+        if (options.maxTokens) {
+          body.max_completion_tokens = options.maxTokens;
+        }
+        if (options.temperature !== undefined) {
+          body.temperature = options.temperature;
+        }
+    } else {
+        // Older models (gpt-3.5-turbo, gpt-4, gpt-4-32k) use max_tokens
+        if (options.maxTokens) {
+          body.max_tokens = options.maxTokens;
+        }
+        if (options.temperature !== undefined) {
+          body.temperature = options.temperature;
+        }
+    }
+
     const res = await fetch(`${this.baseUrl}/chat/completions`, {
       method: "POST",
       headers: {
@@ -31,7 +71,15 @@ class OpenAIProvider {
       throw new Error(`OpenAI generate failed: ${res.status} ${text}`);
     }
     const json = await res.json();
-    return json.choices?.[0]?.message?.content || "";
+    const content = json.choices?.[0]?.message?.content || "";
+
+    // Debug logging
+    if (!content) {
+      console.error("[OpenAI] Empty response received!");
+      console.error("[OpenAI] Full response:", JSON.stringify(json, null, 2));
+    }
+
+    return content;
   }
 
   async listModels() {
@@ -46,7 +94,36 @@ class OpenAIProvider {
       throw new Error(`OpenAI listModels failed: ${res.status} ${text}`);
     }
     const json = await res.json();
-    return (json.data || []).map((m) => m.id);
+    
+    // Filter for chat models only
+    return (json.data || [])
+        .filter(m => {
+            const id = m.id.toLowerCase();
+            // Allow GPT, o1, o3 series
+            const isChatModel = id.startsWith("gpt") || id.startsWith("o1") || id.startsWith("o3") || id.startsWith("chatgpt");
+            // Explicitly exclude non-text/chat utility models
+            const isExcluded = id.includes("audio") ||
+                              id.includes("realtime") ||
+                              id.includes("tts") ||
+                              id.includes("dall-e") ||
+                              id.includes("embedding") ||
+                              id.includes("vision") ||
+                              id.includes("whisper") ||
+                              id.includes("moderation") ||
+                              id.includes("transcribe") ||
+                              id.includes("search") ||
+                              id.includes("diarize");
+
+            // Filter out specific version snapshots (e.g. -2024-08-06, -0125, -1106)
+            // Regex matches:
+            // 1. YYYY-MM-DD (e.g. -2024-08-06)
+            // 2. 4 digits at end (e.g. -0125)
+            const isSnapshot = /-\d{4}-\d{2}-\d{2}/.test(id) || /-\d{4}$/.test(id);
+
+            return isChatModel && !isExcluded && !isSnapshot;
+        })
+        .map((m) => m.id)
+        .sort(); // Alphabetical sort for better UI
   }
 }
 

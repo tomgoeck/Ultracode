@@ -9,6 +9,10 @@ class LLMRegistry {
     this.providers.set(name, provider);
   }
 
+  has(name) {
+    return this.providers.has(name);
+  }
+
   get(name) {
     const provider = this.providers.get(name);
     if (!provider) {

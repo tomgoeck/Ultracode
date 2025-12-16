@@ -8,7 +8,7 @@ class ConfigStore {
    */
   constructor(filePath) {
     this.filePath = filePath;
-    this.data = { providers: [], settings: {} };
+    this.data = { providers: [], settings: {}, keys: {} };
     this.load();
   }
 
@@ -16,8 +16,9 @@ class ConfigStore {
     try {
       const content = fs.readFileSync(this.filePath, "utf8");
       this.data = JSON.parse(content);
+      if (!this.data.keys) this.data.keys = {}; // Ensure keys object exists
     } catch {
-      this.data = { providers: [], settings: {} };
+      this.data = { providers: [], settings: {}, keys: {} };
       this.save();
     }
   }
@@ -29,6 +30,16 @@ class ConfigStore {
 
   listProviders() {
     return this.data.providers || [];
+  }
+
+  getKeys() {
+    return this.data.keys || {};
+  }
+
+  setKey(providerId, key) {
+    if (!this.data.keys) this.data.keys = {};
+    this.data.keys[providerId] = key;
+    this.save();
   }
 
   upsertProvider(cfg) {
