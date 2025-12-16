@@ -58,7 +58,7 @@ class CommandRunner {
     }
 
     return new Promise((resolve) => {
-      exec(command, (err, stdout, stderr) => {
+      exec(command, { cwd: options.cwd }, (err, stdout, stderr) => {
         if (err) {
           resolve({ status: "executed", severity: policy.severity, error: stderr || err.message });
         } else {
@@ -70,7 +70,7 @@ class CommandRunner {
 
   spawnStream(command, policy, options) {
     return new Promise((resolve) => {
-      const child = exec(command);
+      const child = exec(command, { cwd: options.cwd });
       child.stdout?.on("data", (chunk) => options.onData && options.onData(chunk.toString()));
       child.stderr?.on("data", (chunk) => options.onData && options.onData(chunk.toString()));
       child.on("close", (code) => {

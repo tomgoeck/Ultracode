@@ -29,7 +29,10 @@
  * @property {RedFlagRule[]} redFlags
  * @property {number} k
  * @property {number} nSamples
+ * @property {number=} initialSamples
+ * @property {number=} maxSamples
  * @property {string=} voteModel
+ * @property {number=} temperature
  * @property {string=} command
  * @property {ApplyAction=} apply
  */
@@ -44,6 +47,9 @@
  * @property {string=} voteModel
  * @property {number} k
  * @property {number} nSamples
+ * @property {number=} initialSamples
+ * @property {number=} maxSamples
+ * @property {number=} temperature
  * @property {RedFlagRule[]} redFlags
  * @property {Step[]} steps
  */

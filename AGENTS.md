@@ -33,3 +33,10 @@
 - API keys are stored locally via `/api/config/keys` and persisted to `data/config.json`; avoid logging them and never commit `data/`.
 - File writes should go through `ProjectGuard` to stay within the allowed workspace; avoid direct `fs` writes outside guarded paths.
 - Pending commands and audit events are persisted; keep these behaviors intact when modifying command execution flow.
+
+## Projektstand (kurz)
+- Voting adaptiv (first-to-ahead-by-k) mit Temperatur-Ramp und hartem Sample-Cap; Voting-Summary im Console-Log.
+- Agent-Outputs als Actions-JSON (write/append/apply_patch/replace_range/run_cmd/request_info), validiert und über ProjectGuard/CommandRunner ausgeführt; Codefences werden vor dem Schreiben entfernt.
+- Snapshots pro Step in `data/snapshots.db` (SQLite via CLI): runs, steps, votes, actions; Filesystem bleibt Quelle der Wahrheit.
+- UI/API via `src/server.js` + `public/`; Workspaces unter `workspaces/<task-id>` enthalten Artefakte.
+- Tests: `node tests/integration.test.js`; keine npm-Abhängigkeiten im Repo.

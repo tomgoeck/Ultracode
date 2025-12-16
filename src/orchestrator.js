@@ -1,5 +1,12 @@
 const { VotingEngine } = require("./votingEngine");
 const { RedFlagger } = require("./redFlagger");
+const { parseActions, executeActions } = require("./actionExecutor");
+
+function unwrapCodeFence(text) {
+  if (!text || typeof text !== "string") return text;
+  const m = text.trim().match(/^```[a-zA-Z0-9]*\s*\n([\s\S]*?)\n```$/);
+  return m ? m[1] : text;
+}
 
 // Coordinates single-step execution using MAD: stateless prompt → candidates → red-flag filter → voting → apply.
 class Orchestrator {
@@ -14,6 +21,7 @@ class Orchestrator {
     votingEngine,
     auditLogger,
     eventEmitter,
+    snapshotStore,
   }) {
     this.llmRegistry = llmRegistry;
     this.stateStore = stateStore;
@@ -21,6 +29,7 @@ class Orchestrator {
     this.projectGuard = projectGuard;
     this.auditLogger = auditLogger;
     this.eventEmitter = eventEmitter;
+    this.snapshotStore = snapshotStore;
     this.votingEngine =
       votingEngine ||
       new VotingEngine({
@@ -135,22 +144,39 @@ Example:
     const prompt = this.buildPrompt(task, step, state);
     const providerName = step.voteModel || task.voteModel || task.model;
     const provider = this.llmRegistry.get(providerName);
+    const voteConfig = {
+      k: step.k || task.k,
+      initialSamples: step.initialSamples || task.initialSamples,
+      maxSamples: step.maxSamples || step.nSamples || task.maxSamples || task.nSamples,
+      temperature: step.temperature ?? task.temperature,
+      redFlags: step.redFlags || task.redFlags,
+    };
+
+    this.snapshotStore?.recordStepStart({
+      task,
+      step,
+      prompt,
+      config: voteConfig,
+      inputView: { stateRefs: step.stateRefs, goal: task.goal },
+    });
 
     let resultObj = null;
     try {
       resultObj = await this.votingEngine.run({
         provider,
         prompt,
-        k: step.k || task.k,
-        nSamples: step.nSamples || task.nSamples,
-        redFlagRules: step.redFlags || task.redFlags,
-        temperature: step.temperature || task.temperature || 0.2,
+        k: voteConfig.k,
+        initialSamples: voteConfig.initialSamples,
+        maxSamples: voteConfig.maxSamples,
+        redFlagRules: voteConfig.redFlags,
+        temperature: voteConfig.temperature,
         taskId: task.id,
         stepId: step.id,
         voteModel: providerName, // Pass vote model for paraphrasing
       });
     } catch (err) {
       step.status = "failed";
+      this.snapshotStore?.recordStepEnd(step.id, "failed", err.message);
       this.appendLog({
         taskId: task.id,
         stepId: step.id,
@@ -166,13 +192,37 @@ Example:
       return { winner: null, leadBy: 0, applied: false, error: err.message };
     }
 
-    const { winner, candidates, leadBy } = resultObj;
+    const { winner, candidates, leadBy, achievedMargin } = resultObj;
+    this.snapshotStore?.recordVotes(step.id, candidates, winner?.output);
 
     step.candidates = candidates;
     step.winner = winner;
 
+    // Console summary for voting to reduce blind spots in logs
+    if (candidates?.length) {
+      const temps = candidates
+        .map((c) => c.metrics?.temperature)
+        .filter((t) => t !== undefined)
+        .map((t) => Number.parseFloat(t?.toFixed?.(2) || t));
+      const counts = new Map();
+      for (const c of candidates) {
+        const key = c.output || "<empty>";
+        counts.set(key, (counts.get(key) || 0) + 1);
+      }
+      const top = Array.from(counts.entries())
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 3)
+        .map(([k, v]) => `"${k.slice(0, 60).replace(/\s+/g, " ")}" x${v}`);
+      console.log(
+        `[Voting] ${step.id}: samples=${candidates.length}, unique=${counts.size}, k=${voteConfig.k}, leadBy=${leadBy}, winnerVotes=${winner?.voteCount || 0}, marginMet=${achievedMargin}, temps=[${temps.join(
+          ", "
+        )}], top=${top.join(" | ")}`
+      );
+    }
+
     if (!winner) {
       step.status = "failed";
+      this.snapshotStore?.recordStepEnd(step.id, "failed", "no winner");
       this.appendLog({ taskId: task.id, stepId: step.id, event: "no-winner", leadBy });
       this.emitEvent({
         type: "step-error",
@@ -190,7 +240,30 @@ Example:
       { taskId: task.id, stepId: step.id, output: winner.output },
     ]);
 
-    const applyResult = await this.applyWinner(step, winner.output, projectGuardOverride);
+    let applyResult;
+    try {
+      applyResult = await this.applyWinner(step, winner.output, projectGuardOverride);
+    } catch (err) {
+      step.status = "failed";
+      this.snapshotStore?.recordStepEnd(step.id, "failed", err.message);
+      this.appendLog({
+        taskId: task.id,
+        stepId: step.id,
+        event: "error",
+        error: err.message,
+      });
+      this.emitEvent({
+        type: "step-error",
+        taskId: task.id,
+        stepId: step.id,
+        error: err.message,
+      });
+      return { winner, leadBy, applied: false, error: err.message };
+    }
+    if (applyResult?.kind === "actions") {
+      this.snapshotStore?.recordActions(step.id, applyResult.actions, applyResult.results);
+    }
+
     let commandResult = null;
     if (step.command) {
       commandResult = await this.commandRunner.run(step.command, {
@@ -206,11 +279,13 @@ Example:
     }
 
     step.status = "completed";
+    this.snapshotStore?.recordStepEnd(step.id, "completed", null);
     this.appendLog({
       taskId: task.id,
       stepId: step.id,
       event: "winner",
       leadBy,
+      marginMet: achievedMargin || false,
       output: winner.output,
       applyResult,
       commandResult,
@@ -220,6 +295,7 @@ Example:
       taskId: task.id,
       stepId: step.id,
       leadBy,
+      marginMet: achievedMargin || false,
       winner: winner.output,
       applyResult,
       commandResult,
@@ -236,8 +312,33 @@ Example:
   }
 
   async applyWinner(step, output, projectGuardOverride) {
-    if (!step.apply) {
-      // Default: store in state for later consumption.
+    if (!step.apply || !step.apply.type) {
+      // Try structured actions first; fallback to state-only storage.
+      const parsed = (() => {
+        try {
+          return parseActions(unwrapCodeFence(output));
+        } catch (err) {
+          // Treat schema errors as hard failures to avoid acting on malformed output
+          throw err;
+        }
+      })();
+
+      if (parsed) {
+        const guard = projectGuardOverride || this.projectGuard;
+        if (!guard) throw new Error("ProjectGuard not configured");
+        const results = await executeActions({
+          actions: parsed.actions,
+          guard,
+          commandRunner: this.commandRunner,
+          eventEmitter: this.eventEmitter,
+        });
+        this.stateStore.updateSection("appliedOutputs", (prev = []) => [
+          ...prev,
+          { taskId: step.taskId, stepId: step.id, actions: parsed.actions, results },
+        ]);
+        return { kind: "actions", actions: parsed.actions, results };
+      }
+
       this.stateStore.updateSection("appliedOutputs", (prev = []) => [
         ...prev,
         { taskId: step.taskId, stepId: step.id, output },
@@ -247,14 +348,16 @@ Example:
 
     const guard = projectGuardOverride || this.projectGuard;
 
+    const cleanedOutput = unwrapCodeFence(output);
+
     if (step.apply.type === "writeFile") {
       if (!guard) throw new Error("ProjectGuard not configured");
-      return guard.writeFile(step.apply.path, output, { dryRun: step.apply.dryRun });
+      return guard.writeFile(step.apply.path, cleanedOutput, { dryRun: step.apply.dryRun });
     }
     if (step.apply.type === "appendFile") {
       if (!guard) throw new Error("ProjectGuard not configured");
       const prev = await guard.readFile(step.apply.path).catch(() => "");
-      const next = `${prev}${output}`;
+      const next = `${prev}${cleanedOutput}`;
       return guard.writeFile(step.apply.path, next, { dryRun: step.apply.dryRun });
     }
     if (step.apply.type === "statePatch") {
@@ -281,7 +384,7 @@ Example:
       }
       return guard.writeFile(step.apply.path, content, { dryRun: step.apply.dryRun });
     }
-    throw new Error(`Unknown apply type: ${step.apply.type}`);
+    throw new Error(`Unknown apply type: ${step.apply?.type}`);
   }
 
   emitEvent(event) {

@@ -77,6 +77,71 @@
           "task-1765882915097"
         ]
       }
+    ],
+    [
+      "project-1765884130237",
+      {
+        "id": "project-1765884130237",
+        "name": "Unicorn Website",
+        "agentModel": "openai:gpt-4.1-mini",
+        "voteModel": "openai:gpt-4.1-mini",
+        "createdAt": 1765884130237,
+        "tasks": [
+          "task-1765884130245"
+        ]
+      }
+    ],
+    [
+      "project-1765884620116",
+      {
+        "id": "project-1765884620116",
+        "name": "Enteiser",
+        "agentModel": "openai:gpt-4.1-mini",
+        "voteModel": "openai:gpt-4.1-mini",
+        "createdAt": 1765884620116,
+        "tasks": [
+          "task-1765884620121"
+        ]
+      }
+    ],
+    [
+      "project-1765885004707",
+      {
+        "id": "project-1765885004707",
+        "name": "erstelle ein website",
+        "agentModel": "openai:gpt-4.1-mini",
+        "voteModel": "openai:gpt-4.1-mini",
+        "createdAt": 1765885004707,
+        "tasks": [
+          "task-1765885004713"
+        ]
+      }
+    ],
+    [
+      "project-1765885986274",
+      {
+        "id": "project-1765885986274",
+        "name": "Test",
+        "agentModel": "openai:gpt-4.1-mini",
+        "voteModel": "openai:gpt-4.1-mini",
+        "createdAt": 1765885986274,
+        "tasks": [
+          "task-1765885986278"
+        ]
+      }
+    ],
+    [
+      "project-1765886140571",
+      {
+        "id": "project-1765886140571",
+        "name": "Test",
+        "agentModel": "openai:gpt-4.1-mini",
+        "voteModel": "openai:gpt-4.1-mini",
+        "createdAt": 1765886140571,
+        "tasks": [
+          "task-1765886140575"
+        ]
+      }
     ]
   ],
   "tasks": [
@@ -135,6 +200,52 @@
         "projectId": "project-1765882915093",
         "status": "pending",
         "createdAt": 1765882923775
+      }
+    ],
+    [
+      "task-1765884130245",
+      {
+        "id": "task-1765884130245",
+        "title": "Initial Setup: Unicorn Website",
+        "status": "completed",
+        "workspacePath": "/Users/tom/Projects/Ultracode/workspaces/task-1765884130245"
+      }
+    ],
+    [
+      "task-1765884620121",
+      {
+        "id": "task-1765884620121",
+        "title": "Initial Setup: Enteiser",
+        "projectId": "project-1765884620116",
+        "status": "pending",
+        "createdAt": 1765884634660
+      }
+    ],
+    [
+      "task-1765885004713",
+      {
+        "id": "task-1765885004713",
+        "title": "Initial Setup: erstelle ein website",
+        "status": "completed",
+        "workspacePath": "/Users/tom/Projects/Ultracode/workspaces/task-1765885004713"
+      }
+    ],
+    [
+      "task-1765885986278",
+      {
+        "id": "task-1765885986278",
+        "title": "Initial Setup: Test",
+        "status": "completed",
+        "workspacePath": "/Users/tom/Projects/Ultracode/workspaces/task-1765885986278"
+      }
+    ],
+    [
+      "task-1765886140575",
+      {
+        "id": "task-1765886140575",
+        "title": "Initial Setup: Test",
+        "status": "completed",
+        "workspacePath": "/Users/tom/Projects/Ultracode/workspaces/task-1765886140575"
       }
     ]
   ]

@@ -528,9 +528,28 @@ const app = {
                 if (data.type === 'step-start' || data.type === 'step-result') {
                     this.addStepCard(data);
                 }
+                if (data.type === 'step-start') {
+                    this.logToTerminal(`[step ${data.stepId}] started: ${data.intent || '...'}`);
+                }
+                if (data.type === 'step-completed') {
+                    let detail = '';
+                    if (data.marginMet) {
+                        const leadText = data.leadBy !== undefined ? ` lead: ${data.leadBy}` : '';
+                        detail = `voting decided.${leadText}`;
+                    } else if (data.leadBy !== undefined) {
+                        detail = `winner chosen (no voting margin reached, lead: ${data.leadBy})`;
+                    } else {
+                        detail = 'completed.';
+                    }
+                    this.logToTerminal(`[step ${data.stepId}] ${detail}`);
+                }
+                if (data.type === 'step-error') {
+                    this.logToTerminal(`[step ${data.stepId}] ERROR: ${data.error || 'unknown error'}`);
+                }
                 if (data.type === 'task-completed') {
                     this.updateStatusBadge(data.status);
                     this.renderSidebar(); // refresh list status indicators
+                    this.logToTerminal(`[task ${data.taskId}] completed (${data.status})`);
                 }
                 if (data.type === 'log') {
                     // Detailed low level logs

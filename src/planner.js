@@ -10,11 +10,14 @@ const { v4: uuidv4 } = require("crypto");
  * @param {string} ctx.voteModel
  * @param {any} ctx.llmRegistry - access to the LLM to generate the plan
  */
-async function createPlan({ id, title, goal, model, voteModel, llmRegistry, k, nSamples, temperature, redFlags }) {
+async function createPlan({ id, title, goal, model, voteModel, llmRegistry, k, nSamples, initialSamples, temperature, redFlags }) {
   const provider = llmRegistry.get(model);
   if (!provider) {
     throw new Error(`Model ${model} not found`);
   }
+  const defaultK = k || 2;
+  const defaultMaxSamples = nSamples || 12; // nSamples acts as cap now
+  const defaultInitialSamples = initialSamples || 2;
 
   // System prompt for the planner
   const prompt = `
@@ -123,8 +126,10 @@ BAD Intents (generic):
     status: "pending",
     candidates: [],
     redFlags: s.redFlags && s.redFlags.length ? s.redFlags.map(r => ({ pattern: r })) : [],
-    k: s.vote ? 2 : 1, // Default voting config
-    nSamples: s.vote ? 3 : 1,
+    k: s.vote ? defaultK : 1, // Default voting config
+    initialSamples: s.vote ? defaultInitialSamples : 1,
+    maxSamples: s.vote ? defaultMaxSamples : 1,
+    nSamples: s.vote ? defaultMaxSamples : 1, // legacy alias for UI/state
     voteModel: voteModel || model, // use specific vote model if provided
     apply: s.apply || undefined, // Pass through the apply object
   }));
@@ -135,9 +140,11 @@ BAD Intents (generic):
     goal,
     model,
     voteModel,
-    k: k || 2,
-    nSamples: nSamples || 3,
-    temperature: temperature !== undefined ? temperature : 0.2,
+    k: defaultK,
+    initialSamples: defaultInitialSamples,
+    maxSamples: defaultMaxSamples,
+    nSamples: defaultMaxSamples,
+    temperature: temperature !== undefined ? temperature : undefined,
     redFlags: redFlags || [],
     steps
   };

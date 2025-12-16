@@ -19,8 +19,8 @@ Ziel: Coding-Agent, der jede Micro-Änderung als eigenständigen, zustandslosen 
 - **Diff-Preview**: einfacher Zeilen-Diff (`simpleDiff`) zwischen aktueller Datei und vorgeschlagenem Inhalt.
 
 ## Datenstrukturen (Auszug)
-- `Task`: { id, title, goal, priority, risk, model, voteModel?, k, nSamples, redFlags[], steps[] }
-- `Step`: { id, taskId, intent, stateRefs[], command?, status (pending|running|paused|completed|failed), candidates[], winner?, redFlags[], voteModel? }
+- `Task`: { id, title, goal, priority, risk, model, voteModel?, k, initialSamples?, maxSamples?, redFlags[], steps[] }
+- `Step`: { id, taskId, intent, stateRefs[], command?, status (pending|running|paused|completed|failed), candidates[], winner?, redFlags[], voteModel?, initialSamples?, maxSamples? }
   - `apply`: { type: "writeFile"|"appendFile"|"statePatch"|"writeFileFromState", path?, dryRun?, stateKey? }
   - Error-Events (SSE) wenn Voting/Provider scheitert.
 - `Candidate`: { model, promptHash, output, redFlags[], voteCount, metrics }

@@ -20,6 +20,7 @@ const { ResourceMonitor } = require("./resourceMonitor");
 const { VotingEngine } = require("./votingEngine");
 const { RedFlagger } = require("./redFlagger");
 const { GitCommitter } = require("./gitCommitter");
+const { SnapshotStore } = require("./snapshotStore");
 
 // Persistent config and in-memory state
 const configStore = new ConfigStore(path.join(process.cwd(), "data", "config.json"));
@@ -44,6 +45,7 @@ const commandRunner = new CommandRunner({
 const resourceMonitor = new ResourceMonitor();
 const paraphraser = new PromptParaphraser(llms, "gpt-4o-mini"); // Use cheap model for paraphrasing
 const gitCommitter = new GitCommitter(process.cwd()); // Auto-commit task completions
+const snapshotStore = new SnapshotStore(path.join(process.cwd(), "data", "snapshots.db"));
 const votingEngine = new VotingEngine({
   redFlagger: new RedFlagger(),
   paraphraser,
@@ -58,6 +60,7 @@ const orchestrator = new Orchestrator({
   auditLogger,
   eventEmitter: { emit: (ev) => broadcast(ev) },
   votingEngine,
+  snapshotStore,
 });
 const pendingCommands = new Map(pendingStore.list().map((c) => [c.id, c]));
 if (pendingCommands.size) {
@@ -281,7 +284,7 @@ async function handleApi(req, res) {
       }
 
       if (url.pathname === "/api/tasks/create" && req.method === "POST") {
-        const { title, goal, model, voteModel, filePath, k, nSamples, temperature, redFlags, projectId } = body;
+        const { title, goal, model, voteModel, filePath, k, nSamples, maxSamples, initialSamples, temperature, redFlags, projectId } = body;
         if (!title || !goal || !model) {
           return sendJson(res, 400, { error: "title, goal, model required" });
         }
@@ -324,8 +327,9 @@ async function handleApi(req, res) {
           llmRegistry: llms,
           // MAKER parameters
           k: k || 2,
-          nSamples: nSamples || 3,
-          temperature: temperature !== undefined ? temperature : 0.2,
+          nSamples: maxSamples || nSamples || 12, // acts as cap in adaptive voting
+          temperature: temperature !== undefined ? temperature : undefined,
+          initialSamples: initialSamples || 2,
           redFlags: redFlags || [],
         });
         task.projectId = projectId; // Associate with project
