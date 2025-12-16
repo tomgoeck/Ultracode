@@ -18,11 +18,26 @@ async function createPlan({ id, title, goal, model, voteModel, llmRegistry, k, n
 
   // System prompt for the planner
   const prompt = `
-You are a Senior Architect Agent.
+You are a Senior Architect Agent specialized in decomposing coding tasks.
 Goal: "${goal}"
 Project Title: "${title}"
 
-Your task is to decompose this goal into a series of ATOMIC, sequential steps for a coding agent.
+# Pre-Planning Analysis
+
+BEFORE creating steps, analyze the project context:
+1. **Existing Structure:** What files and directories already exist? Look for established patterns and naming conventions.
+2. **Frameworks/Libraries:** What technology stack is in use? Check for package.json, requirements.txt, or similar config files.
+3. **Project Layout:** Is there a src/, lib/, tests/ structure? What's the organizational pattern?
+4. **Coding Style:** What language features are used? TypeScript vs JSDoc vs plain JS? Module system (ES6, CommonJS, etc.)?
+
+Use this analysis to ensure each step's 'intent' guides the agent to:
+- Analyze existing code patterns FIRST before generating new code
+- Match established conventions (naming, structure, style)
+- Generate idiomatic code that fits naturally into the existing codebase
+
+# Task
+
+Decompose the goal into a series of ATOMIC, sequential steps for a coding agent.
 Each step must be self-contained and verifiable.
 The agent operates in a loop: State -> Action -> New State.
 
@@ -61,6 +76,20 @@ Rules:
 2. Break file creation and modification into separate steps if large.
 3. Ensure the last step verifies or provides instructions on how to run.
 4. Output ONLY valid JSON.
+
+# Intent Quality Guidelines
+
+Each step's 'intent' should provide context-aware guidance. Examples:
+
+GOOD Intents (context-aware):
+- "Create user.service.js following the existing service pattern in src/services/ with CRUD operations"
+- "Generate complete package.json with dependencies matching the Node.js/Express stack"
+- "Add authentication middleware to server.js following the existing middleware pattern"
+
+BAD Intents (generic):
+- "Create user service file" (no context, no location guidance)
+- "Make a package.json" (no stack context)
+- "Add auth" (unclear where, unclear pattern)
 `;
 
   console.log(`[Planner] Generating plan for: ${title}`);

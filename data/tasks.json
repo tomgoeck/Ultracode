@@ -51,6 +51,32 @@
           "task-1765881344116"
         ]
       }
+    ],
+    [
+      "project-1765882605828",
+      {
+        "id": "project-1765882605828",
+        "name": "Website",
+        "agentModel": "openai:gpt-4.1-mini",
+        "voteModel": "openai:gpt-4.1-mini",
+        "createdAt": 1765882605828,
+        "tasks": [
+          "task-1765882605831"
+        ]
+      }
+    ],
+    [
+      "project-1765882915093",
+      {
+        "id": "project-1765882915093",
+        "name": "Erstelle eine Website für mich",
+        "agentModel": "openai:gpt-4.1-mini",
+        "voteModel": "openai:gpt-4.1-mini",
+        "createdAt": 1765882915093,
+        "tasks": [
+          "task-1765882915097"
+        ]
+      }
     ]
   ],
   "tasks": [
@@ -89,6 +115,26 @@
         "title": "Initial Setup: Create a website about a nice man named Tom",
         "status": "completed",
         "workspacePath": "/Users/tom/Projects/Ultracode/workspaces/task-1765881344116"
+      }
+    ],
+    [
+      "task-1765882605831",
+      {
+        "id": "task-1765882605831",
+        "title": "Initial Setup: Website",
+        "projectId": "project-1765882605828",
+        "status": "pending",
+        "createdAt": 1765882616743
+      }
+    ],
+    [
+      "task-1765882915097",
+      {
+        "id": "task-1765882915097",
+        "title": "Initial Setup: Erstelle eine Website für mich",
+        "projectId": "project-1765882915093",
+        "status": "pending",
+        "createdAt": 1765882923775
       }
     ]
   ]

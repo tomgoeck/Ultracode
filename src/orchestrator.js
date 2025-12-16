@@ -33,25 +33,95 @@ class Orchestrator {
       .map((ref) => `${ref}: ${JSON.stringify(state[ref], null, 2)}`)
       .join("\n");
 
-    // Determine what type of output is expected
-    let outputInstruction = "Return the complete output for this step.";
+    // Core instructions inspired by agent-cli system prompt
+    const coreInstructions = `
+# Core Mandates
+
+- **Conventions:** Rigorously analyze existing code in the workspace FIRST. Check imports, function signatures, naming patterns, file structure, and architectural style before generating new code.
+- **Libraries/Frameworks:** NEVER assume a library/framework is available. Only use libraries you can verify exist in package.json, requirements.txt, Cargo.toml, or similar configuration files visible in the workspace state.
+- **Style & Structure:** Mimic the exact style (formatting, naming, indentation), structure, and architectural patterns of existing code in this project.
+- **Idiomatic Changes:** Generate code that integrates naturally and idiomatically with surrounding context. Match the typing style (TypeScript vs JSDoc vs plain JS), error handling patterns, and module structure.
+- **Comments:** Add code comments sparingly. Focus on *why* something is done (especially for complex logic), not *what* is done. Only add high-value comments if necessary for clarity.
+- **No Assumptions:** Do not invent APIs, functions, or modules that don't exist. Work only with what you can verify in the workspace state.
+`.trim();
+
+    // Determine what type of output is expected based on apply type
+    let outputInstruction = "";
     if (step.apply?.type === "writeFile") {
-      outputInstruction = `Generate the COMPLETE FILE CONTENT for the file. DO NOT generate shell commands like "mkdir" or "touch". Generate the actual code/text that should be inside the file.`;
+      outputInstruction = `
+## Task: Generate Complete File Content
+
+You are generating the COMPLETE content for: ${step.apply.path}
+
+IMPORTANT:
+- Generate ONLY the file content itself (code, markup, config, data, etc.)
+- DO NOT generate shell commands (mkdir, touch, npm install, cd, etc.)
+- DO NOT generate instructions or numbered steps ("1. Create...", "Step 1:", "First, open...")
+- DO NOT describe what you're doing - just output the actual file content
+- The content should be production-ready and follow project conventions
+- If this file type already exists elsewhere, maintain consistent style and structure
+
+Analysis Steps (review workspace state before generating):
+1. Check if similar files exist (look for patterns, naming conventions)
+2. Identify conventions: imports, exports, formatting, code structure
+3. Match the established patterns in your generated code
+
+Your output will be written directly to the file.
+`.trim();
     } else if (step.apply?.type === "appendFile") {
-      outputInstruction = "Generate ONLY the content to append to the existing file. No shell commands.";
+      outputInstruction = `
+## Task: Generate Content to Append
+
+You are appending content to: ${step.apply.path}
+
+IMPORTANT:
+- Generate ONLY the content to append (no shell commands, no instructions)
+- The existing file will be read, your output appended, then written back
+- Ensure your addition integrates smoothly with existing content
+- Match the style and formatting of the existing file
+- Your output should continue naturally from where the file currently ends
+`.trim();
+    } else if (step.apply?.type === "editFile") {
+      outputInstruction = `
+## Task: Generate Search-Replace Edit Instructions
+
+You are editing: ${step.apply.path}
+
+Output a JSON object with this exact structure:
+{
+  "old_string": "exact text to find (including 3+ lines of context)",
+  "new_string": "replacement text"
+}
+
+CRITICAL RULES:
+- Include at least 3 lines of context BEFORE and AFTER the target text
+- Match whitespace, indentation, and newlines EXACTLY as they appear in the file
+- Never escape the strings - use literal text matching
+- The old_string must uniquely identify the single location to edit
+- If multiple occurrences might exist, include enough context to be unique
+
+Example:
+{
+  "old_string": "function calculate(x) {\\n  return x * 2;\\n}",
+  "new_string": "function calculate(x, multiplier = 2) {\\n  return x * multiplier;\\n}"
+}
+`.trim();
+    } else {
+      outputInstruction = "Return the complete output for this step. Keep it focused and minimal.";
     }
 
     return [
+      coreInstructions,
+      ``,
+      `# Current Task Context`,
       `Task: ${task.title}`,
       `Goal: ${task.goal}`,
       `Step Intent: ${step.intent}`,
-      `State:\n${stateSlice || "(empty)"}`,
       ``,
-      `IMPORTANT INSTRUCTIONS:`,
-      `- ${outputInstruction}`,
-      `- NEVER generate shell commands (mkdir, touch, npm install, etc.) - only file content`,
-      `- If creating a file, return the full code/text content, not commands`,
-      `- Keep output focused and minimal for this single step`,
+      `# Available State`,
+      stateSlice || "(empty)",
+      ``,
+      outputInstruction,
     ].join("\n");
   }
 
