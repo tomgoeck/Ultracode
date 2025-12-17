@@ -1,0 +1,573 @@
+const fs = require("fs");
+const path = require("path");
+const { ContextBuilder } = require("./contextBuilder");
+
+/**
+ * FeatureManager handles the execution and management of features.
+ * Coordinates between FeatureStore, FeaturePlanner, and Orchestrator.
+ */
+class FeatureManager {
+  /**
+   * @param {Object} opts
+   * @param {import('./featureStore').FeatureStore} opts.featureStore
+   * @param {import('./orchestrator').Orchestrator} opts.orchestrator
+   * @param {import('./llmRegistry').LLMRegistry} opts.llmRegistry
+   * @param {Function} opts.planFeature - Function to plan a feature into subtasks
+   * @param {Function} opts.broadcast - Function to broadcast SSE events
+   * @param {import('./gitCommitter').GitCommitter} opts.gitCommitter
+   * @param {import('./serverManager').ServerManager} opts.serverManager
+   * @param {import('./testRunner').TestRunner} opts.testRunner
+   */
+  constructor({ featureStore, orchestrator, llmRegistry, planFeature, broadcast, gitCommitter, serverManager, testRunner }) {
+    this.featureStore = featureStore;
+    this.orchestrator = orchestrator;
+    this.llmRegistry = llmRegistry;
+    this.planFeature = planFeature;
+    this.broadcast = broadcast || (() => {});
+    this.gitCommitter = gitCommitter;
+    this.serverManager = serverManager;
+    this.testRunner = testRunner;
+
+    // Initialize ContextBuilder for intelligent context aggregation
+    this.contextBuilder = new ContextBuilder(featureStore);
+
+    // Track running executions
+    this.runningFeatures = new Map(); // featureId -> { abortController, promise }
+    this.pauseRequested = new Set(); // featureIds that should pause
+  }
+
+  // ==================== FEATURE CRUD (delegated to store) ====================
+
+  getFeature(featureId) {
+    return this.featureStore.getFeature(featureId);
+  }
+
+  getFeaturesByProject(projectId) {
+    return this.featureStore.getFeaturesByProject(projectId);
+  }
+
+  createFeature(data) {
+    return this.featureStore.createFeature(data);
+  }
+
+  updateFeature(featureId, updates) {
+    return this.featureStore.updateFeature(featureId, updates);
+  }
+
+  deleteFeature(featureId) {
+    return this.featureStore.deleteFeature(featureId);
+  }
+
+  // ==================== DEPENDENCY MANAGEMENT ====================
+
+  /**
+   * Check if a feature is runnable (all dependencies completed).
+   * @param {string} featureId
+   * @returns {boolean}
+   */
+  isRunnable(featureId) {
+    return this.featureStore.isFeatureRunnable(featureId);
+  }
+
+  /**
+   * Get the next runnable feature for a project.
+   * Priority order: A > B > C, then by order_index.
+   * @param {string} projectId
+   * @returns {Object|null}
+   */
+  getNextRunnable(projectId) {
+    return this.featureStore.getNextRunnableFeature(projectId);
+  }
+
+  /**
+   * Get all blocked features (have unmet dependencies).
+   * @param {string} projectId
+   * @returns {Array<Object>}
+   */
+  getBlockedFeatures(projectId) {
+    const features = this.featureStore.getFeaturesByProject(projectId);
+    return features.filter((f) => f.status === "pending" && !this.isRunnable(f.id));
+  }
+
+  /**
+   * Validate dependencies before setting them.
+   * @param {string} featureId
+   * @param {Array<string>} newDeps
+   * @returns {{valid: boolean, error?: string}}
+   */
+  validateDependencies(featureId, newDeps) {
+    return this.featureStore.validateDependencies(featureId, newDeps);
+  }
+
+  // ==================== FEATURE EXECUTION ====================
+
+  /**
+   * Execute a specific feature.
+   * Plans subtasks if needed, then executes them sequentially.
+   * @param {string} featureId
+   * @param {Object} options
+   * @returns {Promise<Object>} Execution result
+   */
+  async executeFeature(featureId, options = {}) {
+    const feature = this.featureStore.getFeature(featureId);
+    if (!feature) {
+      throw new Error(`Feature not found: ${featureId}`);
+    }
+
+    const project = this.featureStore.getProject(feature.project_id);
+    if (!project) {
+      throw new Error(`Project not found: ${feature.project_id}`);
+    }
+
+    // Check if runnable
+    if (!this.isRunnable(featureId)) {
+      const blockedBy = (feature.depends_on || []).filter((depId) => {
+        const dep = this.featureStore.getFeature(depId);
+        return !dep || (dep.status !== "completed" && dep.status !== "verified");
+      });
+      throw new Error(`Feature is blocked by unmet dependencies: ${blockedBy.join(", ")}`);
+    }
+
+    // Check if already running
+    if (this.runningFeatures.has(featureId)) {
+      throw new Error(`Feature is already running: ${featureId}`);
+    }
+
+    // Update status to running
+    this.featureStore.updateFeature(featureId, { status: "running" });
+    this.featureStore.recordEvent(project.id, featureId, null, "feature_started", {
+      name: feature.name,
+      priority: feature.priority,
+    });
+    this.broadcast({ type: "feature-started", projectId: project.id, featureId, feature });
+
+    const abortController = { aborted: false };
+    const executionPromise = this._runFeatureExecution(feature, project, abortController, options);
+    this.runningFeatures.set(featureId, { abortController, promise: executionPromise });
+
+    try {
+      const result = await executionPromise;
+      return result;
+    } finally {
+      this.runningFeatures.delete(featureId);
+      this.pauseRequested.delete(featureId);
+    }
+  }
+
+  /**
+   * Internal: Run the actual feature execution.
+   * @private
+   */
+  async _runFeatureExecution(feature, project, abortController, options) {
+    const featureId = feature.id;
+    const results = [];
+    let finalStatus = "completed";
+
+    try {
+      // Step 1: Plan the feature into subtasks if needed
+      let subtasks = this.featureStore.getSubtasksByFeature(featureId);
+      if (subtasks.length === 0) {
+        this.broadcast({ type: "feature-planning", projectId: project.id, featureId });
+
+        // Load context
+        const context = await this._loadFeatureContext(project, feature);
+
+        // Plan the feature
+        const plannerModel = project.planner_model;
+        if (!plannerModel) {
+          throw new Error("No planner model configured for project");
+        }
+
+        const plannedSubtasks = await this.planFeature({
+          feature,
+          project,
+          context,
+          llmRegistry: this.llmRegistry,
+          plannerModel,
+        });
+
+        // Create subtasks in database
+        for (const st of plannedSubtasks) {
+          this.featureStore.createSubtask({
+            featureId,
+            intent: st.intent,
+            applyType: st.apply?.type,
+            applyPath: st.apply?.path,
+          });
+        }
+
+        subtasks = this.featureStore.getSubtasksByFeature(featureId);
+        this.broadcast({ type: "feature-planned", projectId: project.id, featureId, subtaskCount: subtasks.length });
+      }
+
+      // Step 2: Execute subtasks sequentially
+      const { ProjectGuard } = require("./projectGuard");
+      const workspaceGuard = new ProjectGuard(project.folder_path);
+
+      for (const subtask of subtasks) {
+        // Check for abort/pause
+        if (abortController.aborted || this.pauseRequested.has(featureId)) {
+          finalStatus = "paused";
+          break;
+        }
+
+        // Skip completed subtasks
+        if (subtask.status === "completed") {
+          continue;
+        }
+
+        // Update subtask status
+        this.featureStore.updateSubtask(subtask.id, { status: "running" });
+        this.featureStore.recordEvent(project.id, featureId, subtask.id, "subtask_started", {
+          intent: subtask.intent,
+        });
+        this.broadcast({ type: "subtask-started", projectId: project.id, featureId, subtaskId: subtask.id, subtask });
+
+        try {
+          // Build task object for orchestrator
+          const task = {
+            id: `task-${featureId}-${subtask.id}`,
+            title: `${feature.name}: ${subtask.intent}`,
+            goal: subtask.intent,
+            model: project.executor_model,
+            voteModel: project.vote_model || project.executor_model,
+            k: 2,
+            nSamples: 3,
+            steps: [
+              {
+                id: subtask.id,
+                intent: subtask.intent,
+                stateRefs: ["workspace"],
+                apply: {
+                  type: subtask.apply_type || "writeFile",
+                  path: subtask.apply_path,
+                },
+              },
+            ],
+          };
+
+          // Run through orchestrator
+          const stepResult = await this.orchestrator.runStep(task, task.steps[0], workspaceGuard);
+
+          // Update subtask with result
+          this.featureStore.updateSubtask(subtask.id, {
+            status: "completed",
+            result: stepResult,
+          });
+          this.featureStore.recordEvent(project.id, featureId, subtask.id, "subtask_completed", {
+            hasWinner: !!stepResult.winner,
+          });
+          this.broadcast({ type: "subtask-completed", projectId: project.id, featureId, subtaskId: subtask.id, result: stepResult });
+          results.push({ subtaskId: subtask.id, result: stepResult });
+        } catch (subtaskError) {
+          // Subtask failed
+          this.featureStore.updateSubtask(subtask.id, {
+            status: "failed",
+            error: subtaskError.message,
+          });
+          this.featureStore.recordEvent(project.id, featureId, subtask.id, "subtask_failed", {
+            error: subtaskError.message,
+          });
+          this.broadcast({ type: "subtask-failed", projectId: project.id, featureId, subtaskId: subtask.id, error: subtaskError.message });
+          results.push({ subtaskId: subtask.id, error: subtaskError.message });
+          finalStatus = "failed";
+          break; // Stop on first failure
+        }
+      }
+
+      // Step 3: Run automated tests if configured
+      if (finalStatus === "completed" && this.testRunner && this.serverManager) {
+        const testResult = await this._testFeature(feature, project, options);
+        if (testResult) {
+          if (testResult.passed) {
+            finalStatus = "verified";
+          } else {
+            finalStatus = "failed";
+          }
+        }
+      }
+
+      // Step 4: Update feature status
+      if (finalStatus === "completed" || finalStatus === "verified") {
+        // Generate technical summary
+        const technicalSummary = this._generateTechnicalSummary(feature, subtasks, results);
+        this.featureStore.updateFeature(featureId, {
+          status: finalStatus,
+          technicalSummary,
+        });
+
+        // Git commit
+        if (this.gitCommitter) {
+          const commitResult = await this.gitCommitter.commitFeatureCompletion(feature, project, results);
+          if (commitResult.committed) {
+            this.featureStore.recordEvent(project.id, featureId, null, "git_commit", {
+              message: commitResult.message,
+              changedFiles: commitResult.changedFiles,
+            });
+          }
+        }
+
+        this.featureStore.recordEvent(project.id, featureId, null, "feature_completed", {
+          subtasksCompleted: results.filter((r) => !r.error).length,
+          technicalSummary: technicalSummary?.substring(0, 200),
+          status: finalStatus,
+        });
+        this.broadcast({ type: "feature-completed", projectId: project.id, featureId, results, status: finalStatus });
+      } else if (finalStatus === "paused") {
+        this.featureStore.updateFeature(featureId, { status: "paused" });
+        this.featureStore.recordEvent(project.id, featureId, null, "feature_paused", {});
+        this.broadcast({ type: "feature-paused", projectId: project.id, featureId });
+      } else {
+        this.featureStore.updateFeature(featureId, { status: "failed" });
+        this.featureStore.recordEvent(project.id, featureId, null, "feature_failed", {
+          lastError: results[results.length - 1]?.error,
+        });
+        this.broadcast({ type: "feature-failed", projectId: project.id, featureId, results });
+      }
+
+      return { featureId, status: finalStatus, results };
+    } catch (error) {
+      // Unexpected error
+      this.featureStore.updateFeature(featureId, { status: "failed" });
+      this.featureStore.recordEvent(project.id, featureId, null, "feature_error", {
+        error: error.message,
+      });
+      this.broadcast({ type: "feature-error", projectId: project.id, featureId, error: error.message });
+      throw error;
+    }
+  }
+
+  /**
+   * Load context for feature planning using ContextBuilder.
+   * @private
+   */
+  async _loadFeatureContext(project, feature) {
+    // Use ContextBuilder for intelligent context aggregation
+    const richContext = await this.contextBuilder.buildPlanningContext(project, feature, {
+      maxDepth: 3,
+      includeSimilarFeatures: true,
+    });
+
+    // Also load features.json for backward compatibility
+    const featuresJsonPath = path.join(project.folder_path, "features.json");
+    let featuresJson = null;
+    try {
+      featuresJson = JSON.parse(fs.readFileSync(featuresJsonPath, "utf8"));
+    } catch {
+      // features.json not found or invalid
+    }
+
+    // Return both rich context and legacy format
+    return {
+      // Rich context from ContextBuilder
+      richContext,
+
+      // Legacy format (for backward compatibility with existing planFeature calls)
+      projectMd: richContext.guidelines || "",
+      featuresJson,
+      completedFeatures: richContext.completedFeatures || [],
+
+      // Additional context fields
+      fileTree: richContext.fileTree || [],
+      dependencies: richContext.dependencies || [],
+    };
+  }
+
+  /**
+   * Generate technical summary for a completed feature.
+   * @private
+   */
+  _generateTechnicalSummary(feature, subtasks, results) {
+    const completedSubtasks = subtasks.filter((st) => st.status === "completed");
+    const filesModified = new Set();
+
+    for (const st of completedSubtasks) {
+      if (st.apply_path) {
+        filesModified.add(st.apply_path);
+      }
+    }
+
+    const summary = [
+      `Feature "${feature.name}" completed.`,
+      `Subtasks: ${completedSubtasks.length}/${subtasks.length} completed.`,
+      filesModified.size > 0 ? `Files modified: ${Array.from(filesModified).join(", ")}` : "",
+    ]
+      .filter(Boolean)
+      .join("\n");
+
+    return summary;
+  }
+
+  /**
+   * Test a completed feature with Puppeteer + LLM verification.
+   * @private
+   */
+  async _testFeature(feature, project, options) {
+    // Skip tests if disabled
+    if (options.skipTests) {
+      console.log(`[FeatureManager] Tests skipped for feature ${feature.id}`);
+      return null;
+    }
+
+    // Skip if no DoD specified
+    if (!feature.dod) {
+      console.log(`[FeatureManager] No DoD specified for feature ${feature.id}, skipping tests`);
+      return null;
+    }
+
+    console.log(`[FeatureManager] Testing feature: ${feature.name}`);
+    this.broadcast({ type: "feature-testing", projectId: project.id, featureId: feature.id });
+
+    try {
+      // Start dev server
+      const { url } = await this.serverManager.startServer(project.folder_path, project.id);
+
+      // Prepare screenshot path
+      const screenshotDir = path.join(project.folder_path, ".ultracode", "screenshots");
+      fs.mkdirSync(screenshotDir, { recursive: true });
+      const screenshotPath = path.join(screenshotDir, `${feature.id}-${Date.now()}.png`);
+
+      // Run test
+      const testResult = await this.testRunner.testFeature({
+        url,
+        featureName: feature.name,
+        featureDescription: feature.description || "",
+        dod: feature.dod,
+        voteModel: project.vote_model || project.executor_model,
+        screenshotPath,
+      });
+
+      // Record event
+      this.featureStore.recordEvent(project.id, feature.id, null, "feature_tested", {
+        passed: testResult.passed,
+        feedback: testResult.feedback?.substring(0, 200),
+      });
+
+      this.broadcast({
+        type: "feature-tested",
+        projectId: project.id,
+        featureId: feature.id,
+        testResult,
+      });
+
+      // Generate manual test instructions if needed
+      const manualInstructions = this.testRunner.generateManualTestInstructions(feature);
+      if (manualInstructions) {
+        console.log(`[FeatureManager] Manual tests required:\n${manualInstructions.instructions}`);
+        this.broadcast({
+          type: "manual-tests-required",
+          projectId: project.id,
+          featureId: feature.id,
+          manualInstructions,
+        });
+      }
+
+      return testResult;
+    } catch (error) {
+      console.error(`[FeatureManager] Test error:`, error.message);
+      this.featureStore.recordEvent(project.id, feature.id, null, "test_error", {
+        error: error.message,
+      });
+      this.broadcast({
+        type: "test-error",
+        projectId: project.id,
+        featureId: feature.id,
+        error: error.message,
+      });
+      return { passed: false, feedback: `Test error: ${error.message}` };
+    }
+  }
+
+  /**
+   * Execute the next runnable feature for a project.
+   * @param {string} projectId
+   * @returns {Promise<Object|null>}
+   */
+  async executeNextRunnable(projectId) {
+    const feature = this.getNextRunnable(projectId);
+    if (!feature) {
+      return null;
+    }
+    return this.executeFeature(feature.id);
+  }
+
+  /**
+   * Request to pause a running feature (graceful, after current subtask).
+   * @param {string} featureId
+   */
+  requestPause(featureId) {
+    if (this.runningFeatures.has(featureId)) {
+      this.pauseRequested.add(featureId);
+      return true;
+    }
+    return false;
+  }
+
+  /**
+   * Abort a running feature immediately.
+   * @param {string} featureId
+   */
+  abortFeature(featureId) {
+    const running = this.runningFeatures.get(featureId);
+    if (running) {
+      running.abortController.aborted = true;
+      return true;
+    }
+    return false;
+  }
+
+  /**
+   * Resume a paused feature.
+   * @param {string} featureId
+   * @returns {Promise<Object>}
+   */
+  async resumeFeature(featureId) {
+    const feature = this.featureStore.getFeature(featureId);
+    if (!feature || feature.status !== "paused") {
+      throw new Error(`Feature is not paused: ${featureId}`);
+    }
+    return this.executeFeature(featureId);
+  }
+
+  /**
+   * Check if a feature is currently running.
+   * @param {string} featureId
+   * @returns {boolean}
+   */
+  isRunning(featureId) {
+    return this.runningFeatures.has(featureId);
+  }
+
+  /**
+   * Get execution status for a feature.
+   * @param {string} featureId
+   * @returns {Object}
+   */
+  getExecutionStatus(featureId) {
+    const feature = this.featureStore.getFeature(featureId);
+    if (!feature) return null;
+
+    const subtasks = this.featureStore.getSubtasksByFeature(featureId);
+    const completed = subtasks.filter((st) => st.status === "completed").length;
+    const running = subtasks.filter((st) => st.status === "running").length;
+    const pending = subtasks.filter((st) => st.status === "pending").length;
+    const failed = subtasks.filter((st) => st.status === "failed").length;
+
+    return {
+      featureId,
+      featureStatus: feature.status,
+      isRunning: this.isRunning(featureId),
+      isPauseRequested: this.pauseRequested.has(featureId),
+      subtasks: {
+        total: subtasks.length,
+        completed,
+        running,
+        pending,
+        failed,
+      },
+      progress: subtasks.length > 0 ? Math.round((completed / subtasks.length) * 100) : 0,
+    };
+  }
+}
+
+module.exports = { FeatureManager };
