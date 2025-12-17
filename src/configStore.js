@@ -36,6 +36,10 @@ class ConfigStore {
     return this.data.keys || {};
   }
 
+  getKey(providerId) {
+    return this.data.keys ? this.data.keys[providerId] : undefined;
+  }
+
   setKey(providerId, key) {
     if (!this.data.keys) this.data.keys = {};
     this.data.keys[providerId] = key;

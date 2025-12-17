@@ -85,6 +85,70 @@ class OpenAIProvider {
     return content;
   }
 
+  /**
+   * Generate with image support (for vision models)
+   * @param {string} prompt - Text prompt
+   * @param {string} base64Image - Base64-encoded image
+   * @param {Object} options - Generation options
+   * @returns {Promise<string>}
+   */
+  async generateWithImage(prompt, base64Image, options = {}) {
+    if (!this.apiKey) throw new Error("OpenAI API key missing");
+
+    const body = {
+      model: this.model,
+      messages: [
+        {
+          role: "user",
+          content: [
+            { type: "text", text: prompt },
+            {
+              type: "image_url",
+              image_url: {
+                url: `data:image/png;base64,${base64Image}`,
+                detail: options.detail || "high",
+              },
+            },
+          ],
+        },
+      ],
+      max_tokens: options.maxTokens || 1000,
+    };
+
+    if (options.temperature !== undefined) {
+      body.temperature = options.temperature;
+    }
+
+    console.log(`[OpenAI →] VISION REQUEST: ${this.model} | prompt: ${prompt.substring(0, 80)}...`);
+
+    const res = await fetch(`${this.baseUrl}/chat/completions`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${this.apiKey}`,
+      },
+      body: JSON.stringify(body),
+    });
+
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(`OpenAI vision generate failed: ${res.status} ${text}`);
+    }
+
+    const json = await res.json();
+    const content = json.choices?.[0]?.message?.content || "";
+
+    if (!content) {
+      console.error("[OpenAI ✗] VISION RESPONSE: Empty!");
+      console.error("[OpenAI] Full response:", JSON.stringify(json, null, 2));
+    } else {
+      const preview = content.substring(0, 100).replace(/\n/g, " ");
+      console.log(`[OpenAI ←] VISION RESPONSE: ${content.length} chars | "${preview}..."`);
+    }
+
+    return content;
+  }
+
   async listModels() {
     if (!this.apiKey) throw new Error("OpenAI API key missing");
     const res = await fetch(`${this.baseUrl}/models`, {

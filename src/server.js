@@ -21,6 +21,13 @@ const { VotingEngine } = require("./votingEngine");
 const { RedFlagger } = require("./redFlagger");
 const { GitCommitter } = require("./gitCommitter");
 const { SnapshotStore } = require("./snapshotStore");
+const { FeatureStore } = require("./featureStore");
+const { WizardAgent } = require("./wizardAgent");
+const { TavilyProvider } = require("./providers/tavilyProvider");
+const { FeatureManager } = require("./featureManager");
+const { planFeature } = require("./featurePlanner");
+const { ServerManager } = require("./serverManager");
+const { TestRunner } = require("./testRunner");
 
 // Persistent config and in-memory state
 const configStore = new ConfigStore(path.join(process.cwd(), "data", "config.json"));
@@ -46,6 +53,33 @@ const resourceMonitor = new ResourceMonitor();
 const paraphraser = new PromptParaphraser(llms, "gpt-4o-mini"); // Use cheap model for paraphrasing
 const gitCommitter = new GitCommitter(process.cwd()); // Auto-commit task completions
 const snapshotStore = new SnapshotStore(path.join(process.cwd(), "data", "snapshots.db"));
+const featureStore = new FeatureStore(path.join(process.cwd(), "data", "features.db"));
+
+// Initialize Tavily provider for web search (if API key is configured)
+const tavilyApiKey = configStore.getKey("tavily");
+const tavilyProvider = tavilyApiKey ? new TavilyProvider({ apiKey: tavilyApiKey }) : null;
+
+// Initialize Wizard Agent
+const wizardAgent = new WizardAgent({
+  featureStore,
+  llmRegistry: llms,
+  tavilyProvider,
+});
+
+// Initialize ServerManager and TestRunner for automated testing
+const serverManager = new ServerManager();
+const testRunner = new TestRunner(llms);
+
+// Cleanup on exit
+process.on('SIGINT', () => {
+  console.log('\n[Server] Shutting down...');
+  serverManager.stopAllServers();
+  testRunner.close().then(() => process.exit(0));
+});
+
+// Note: FeatureManager is initialized after orchestrator (see below)
+let featureManager = null;
+
 const votingEngine = new VotingEngine({
   redFlagger: new RedFlagger(),
   paraphraser,
@@ -62,6 +96,19 @@ const orchestrator = new Orchestrator({
   votingEngine,
   snapshotStore,
 });
+
+// Initialize FeatureManager (after orchestrator)
+featureManager = new FeatureManager({
+  featureStore,
+  orchestrator,
+  llmRegistry: llms,
+  planFeature,
+  broadcast,
+  gitCommitter,
+  serverManager,
+  testRunner,
+});
+
 const pendingCommands = new Map(pendingStore.list().map((c) => [c.id, c]));
 if (pendingCommands.size) {
   stateStore.updateSection("pendingCommands", () => Array.from(pendingCommands.values()));
@@ -476,6 +523,651 @@ async function handleApi(req, res) {
       if (url.pathname === "/api/metrics/summary" && req.method === "GET") {
         const summary = resourceMonitor.getSummary();
         return sendJson(res, 200, summary);
+      }
+
+      // ==================== WIZARD ENDPOINTS ====================
+
+      // Start wizard (Page 1: Basics)
+      if (url.pathname === "/api/wizard/start" && req.method === "POST") {
+        const { name, description, basePath } = body;
+        if (!name) return sendJson(res, 400, { error: "name required" });
+
+        const projectsBasePath = basePath || path.join(process.cwd(), "projects");
+        fs.mkdirSync(projectsBasePath, { recursive: true });
+
+        const result = wizardAgent.startWizard({
+          name,
+          description,
+          basePath: projectsBasePath,
+        });
+
+        return sendJson(res, 200, {
+          ok: true,
+          ...result,
+        });
+      }
+
+      // Get wizard state
+      if (url.pathname === "/api/wizard/status" && req.method === "GET") {
+        const projectId = url.searchParams.get("projectId");
+        if (!projectId) return sendJson(res, 400, { error: "projectId required" });
+
+        const state = wizardAgent.getWizardState(projectId);
+        if (!state) {
+          // Try to resume from database
+          const resumed = wizardAgent.resumeWizard(projectId);
+          if (!resumed) return sendJson(res, 404, { error: "no active wizard for this project" });
+          return sendJson(res, 200, { ok: true, ...resumed, resumed: true });
+        }
+
+        const project = featureStore.getProject(projectId);
+        return sendJson(res, 200, {
+          ok: true,
+          project,
+          ...state,
+        });
+      }
+
+      // Chat in wizard (Page 2: Clarification)
+      if (url.pathname === "/api/wizard/chat" && req.method === "POST") {
+        const { sessionId, projectId, message, chatModel, model } = body;
+        const id = sessionId || projectId;
+
+        if (!id || !message) {
+          return sendJson(res, 400, { error: "sessionId/projectId and message required" });
+        }
+
+        // Use provided model (chatModel or model) or default to first available
+        const modelStr = chatModel || model || llms.list()[0];
+        if (!modelStr) {
+          return sendJson(res, 400, { error: "no LLM model available" });
+        }
+
+        // Ensure provider is registered (dynamic registration if needed)
+        const ensureProvider = (modelStr) => {
+          if (!modelStr.includes(':')) {
+            // Simple name, assume already registered
+            return modelStr;
+          }
+
+          const [providerType, modelName] = modelStr.split(':', 2);
+          const providerKey = `${providerType}:${modelName}`;
+
+          // Check if already registered
+          if (llms.has(providerKey)) return providerKey;
+
+          // Get API key from config
+          const keys = configStore.getKeys();
+          const apiKey = keys[providerType];
+
+          // Create and register provider
+          const cfg = {
+            name: providerKey,
+            type: providerType,
+            apiKey,
+            model: modelName,
+          };
+          llms.register(providerKey, createProvider(cfg));
+          return providerKey;
+        };
+
+        const modelToUse = ensureProvider(modelStr);
+        const result = await wizardAgent.processChat(id, message, modelToUse);
+        return sendJson(res, 200, { ok: true, ...result });
+      }
+
+      // Get initial greeting for wizard chat
+      if (url.pathname === "/api/wizard/greeting" && req.method === "GET") {
+        const projectId = url.searchParams.get("projectId");
+        if (!projectId) return sendJson(res, 400, { error: "projectId required" });
+
+        const project = featureStore.getProject(projectId);
+        if (!project) return sendJson(res, 404, { error: "project not found" });
+
+        const greeting = wizardAgent.getInitialGreeting(project.name, project.description);
+        return sendJson(res, 200, { ok: true, greeting });
+      }
+
+      // Web search in wizard
+      if (url.pathname === "/api/wizard/web-search" && req.method === "POST") {
+        const { projectId, query } = body;
+        if (!projectId || !query) {
+          return sendJson(res, 400, { error: "projectId and query required" });
+        }
+
+        if (!tavilyProvider) {
+          return sendJson(res, 400, {
+            error: "Web search not configured. Please add a Tavily API key in settings.",
+          });
+        }
+
+        const result = await wizardAgent.webSearch(projectId, query);
+        return sendJson(res, 200, { ok: true, ...result });
+      }
+
+      // Extract summary from conversation
+      if (url.pathname === "/api/wizard/extract-summary" && req.method === "POST") {
+        const { sessionId, projectId, chatModel, model } = body;
+        const id = sessionId || projectId;
+
+        if (!id) return sendJson(res, 400, { error: "sessionId/projectId required" });
+
+        const modelStr = chatModel || model || llms.list()[0];
+        if (!modelStr) return sendJson(res, 400, { error: "no LLM model available" });
+
+        // Ensure provider is registered (dynamic registration if needed)
+        const ensureProvider = (modelStr) => {
+          if (!modelStr.includes(':')) {
+            return modelStr;
+          }
+
+          const [providerType, modelName] = modelStr.split(':', 2);
+          const providerKey = `${providerType}:${modelName}`;
+
+          if (llms.has(providerKey)) return providerKey;
+
+          const keys = configStore.getKeys();
+          const apiKey = keys[providerType];
+
+          const cfg = {
+            name: providerKey,
+            type: providerType,
+            apiKey,
+            model: modelName,
+          };
+          llms.register(providerKey, createProvider(cfg));
+          return providerKey;
+        };
+
+        const modelToUse = ensureProvider(modelStr);
+        try {
+          const result = await wizardAgent.extractSummary(id, modelToUse);
+          const status = result.success ? 200 : 400;
+          if (!result.success) {
+            console.warn("[Wizard] Summary extraction incomplete:", result.warnings);
+          }
+          return sendJson(res, status, {
+            ok: result.success,
+            error: result.success ? undefined : "Summary incomplete. See warnings.",
+            warnings: result.warnings,
+            projectMd: result.projectMd,
+            featuresJson: result.featuresJson,
+            rawPreview: result.raw?.slice(0, 2000),
+          });
+        } catch (extractErr) {
+          console.error("[Wizard] Extract summary failed:", extractErr.message);
+          return sendJson(res, 400, {
+            ok: false,
+            error: extractErr.message,
+            warnings: [],
+          });
+        }
+      }
+
+      // Update features manually
+      if (url.pathname === "/api/wizard/features" && req.method === "PUT") {
+        const { projectId, features } = body;
+        if (!projectId || !features) {
+          return sendJson(res, 400, { error: "projectId and features required" });
+        }
+
+        wizardAgent.updateFeatures(projectId, features);
+        return sendJson(res, 200, { ok: true });
+      }
+
+      // Finalize wizard (Page 3: Model Selection)
+      if (url.pathname === "/api/wizard/finalize" && req.method === "POST") {
+        const { projectId, plannerModel, executorModel, voteModel, summary, projectMd, featuresJson } = body;
+        if (!projectId) return sendJson(res, 400, { error: "projectId required" });
+        if (!plannerModel || !executorModel) {
+          return sendJson(res, 400, { error: "plannerModel and executorModel required" });
+        }
+
+        try {
+          const result = await wizardAgent.finalizeWizard(projectId, {
+            plannerModel,
+            executorModel,
+            voteModel: voteModel || executorModel,
+            summary,
+            projectMd,
+            featuresJson,
+          });
+          const project = featureStore.getProject(projectId);
+          return sendJson(res, 200, { ok: true, ...result, project });
+        } catch (err) {
+          console.error("[Wizard finalize] Failed:", err);
+          return sendJson(res, 500, { error: err.message || "finalize failed" });
+        }
+      }
+
+      // Cancel wizard
+      if (url.pathname === "/api/wizard/cancel" && req.method === "POST") {
+        const { projectId, deleteProject } = body;
+        if (!projectId) return sendJson(res, 400, { error: "projectId required" });
+
+        wizardAgent.cancelWizard(projectId, deleteProject);
+        return sendJson(res, 200, { ok: true });
+      }
+
+      // ==================== FEATURE STORE ENDPOINTS ====================
+
+      // Get all projects (from FeatureStore)
+      if (url.pathname === "/api/v2/projects" && req.method === "GET") {
+        const allProjects = featureStore.getAllProjects();
+        return sendJson(res, 200, { projects: allProjects });
+      }
+
+      // Get project details
+      if (url.pathname.match(/^\/api\/v2\/projects\/[^/]+$/) && req.method === "GET") {
+        const projectId = url.pathname.split("/").pop();
+        const project = featureStore.getProject(projectId);
+        if (!project) return sendJson(res, 404, { error: "project not found" });
+
+        const features = featureStore.getFeaturesByProject(projectId);
+        const stats = featureStore.getProjectStats(projectId);
+        return sendJson(res, 200, { project, features, stats });
+      }
+
+      // Delete project
+      if (url.pathname.match(/^\/api\/v2\/projects\/[^/]+$/) && req.method === "DELETE") {
+        const projectId = url.pathname.split("/").pop();
+        const project = featureStore.getProject(projectId);
+        if (!project) return sendJson(res, 404, { error: "project not found" });
+
+        try {
+          // 1. Stop any running server for this project
+          serverManager.stopServer(projectId);
+
+          // 2. Delete from database (removes features, subtasks, events, wizard messages)
+          featureStore.deleteProject(projectId);
+
+          // 3. Delete workspace folder from filesystem
+          if (project.folder_path && fs.existsSync(project.folder_path)) {
+            fs.rmSync(project.folder_path, { recursive: true, force: true });
+            console.log(`[DeleteProject] Deleted workspace folder: ${project.folder_path}`);
+          }
+
+          console.log(`[DeleteProject] Successfully deleted project ${projectId} (${project.name})`);
+          broadcast({ type: "project-deleted", projectId, name: project.name });
+
+          return sendJson(res, 200, { ok: true, message: `Project "${project.name}" deleted successfully` });
+        } catch (err) {
+          console.error(`[DeleteProject] Failed to delete project ${projectId}:`, err);
+          return sendJson(res, 500, { error: `Failed to delete project: ${err.message}` });
+        }
+      }
+
+      // Get features for a project
+      if (url.pathname === "/api/v2/features" && req.method === "GET") {
+        const projectId = url.searchParams.get("projectId");
+        if (!projectId) return sendJson(res, 400, { error: "projectId required" });
+
+        const features = featureStore.getFeaturesByProject(projectId);
+        return sendJson(res, 200, { features });
+      }
+
+      // Get next runnable feature
+      if (url.pathname === "/api/v2/features/next-runnable" && req.method === "GET") {
+        const projectId = url.searchParams.get("projectId");
+        if (!projectId) return sendJson(res, 400, { error: "projectId required" });
+
+        const feature = featureStore.getNextRunnableFeature(projectId);
+        return sendJson(res, 200, { feature });
+      }
+
+      // Create feature
+      if (url.pathname === "/api/v2/features" && req.method === "POST") {
+        const { projectId, name, description, priority, dependsOn, dod } = body;
+        if (!projectId || !name) {
+          return sendJson(res, 400, { error: "projectId and name required" });
+        }
+
+        // Validate dependencies if provided
+        if (dependsOn && dependsOn.length > 0) {
+          const features = featureStore.getFeaturesByProject(projectId);
+          const maxOrder = Math.max(...features.map((f) => f.order_index || 0), 0);
+          const tempId = `temp-${Date.now()}`;
+          const validation = featureStore.validateDependencies(tempId, dependsOn);
+          if (!validation.valid) {
+            return sendJson(res, 400, { error: validation.error });
+          }
+        }
+
+        const featureId = featureStore.createFeature({
+          projectId,
+          name,
+          description,
+          priority: priority || "B",
+          dependsOn: dependsOn || [],
+          dod,
+        });
+
+        return sendJson(res, 200, { ok: true, featureId });
+      }
+
+      // Update feature
+      if (url.pathname.match(/^\/api\/v2\/features\/[^/]+$/) && req.method === "PUT") {
+        const featureId = url.pathname.split("/").pop();
+        const { name, description, priority, status, dependsOn, dod, technicalSummary, orderIndex } = body;
+
+        // Validate dependencies if updating
+        if (dependsOn !== undefined) {
+          const validation = featureStore.validateDependencies(featureId, dependsOn);
+          if (!validation.valid) {
+            return sendJson(res, 400, { error: validation.error });
+          }
+        }
+
+        featureStore.updateFeature(featureId, {
+          name,
+          description,
+          priority,
+          status,
+          dependsOn,
+          dod,
+          technicalSummary,
+          orderIndex,
+        });
+
+        return sendJson(res, 200, { ok: true });
+      }
+
+      // Delete feature
+      if (url.pathname.match(/^\/api\/v2\/features\/[^/]+$/) && req.method === "DELETE") {
+        const featureId = url.pathname.split("/").pop();
+        featureStore.deleteFeature(featureId);
+        return sendJson(res, 200, { ok: true });
+      }
+
+      // Reorder features
+      if (url.pathname === "/api/v2/features/reorder" && req.method === "POST") {
+        const { projectId, ordering } = body;
+        if (!projectId || !ordering) {
+          return sendJson(res, 400, { error: "projectId and ordering required" });
+        }
+
+        featureStore.reorderFeatures(projectId, ordering);
+        return sendJson(res, 200, { ok: true });
+      }
+
+      // Get subtasks for a feature
+      if (url.pathname === "/api/v2/subtasks" && req.method === "GET") {
+        const featureId = url.searchParams.get("featureId");
+        if (!featureId) return sendJson(res, 400, { error: "featureId required" });
+
+        const subtasks = featureStore.getSubtasksByFeature(featureId);
+        return sendJson(res, 200, { subtasks });
+      }
+
+      // Get events for a project
+      if (url.pathname === "/api/v2/events" && req.method === "GET") {
+        const projectId = url.searchParams.get("projectId");
+        const featureId = url.searchParams.get("featureId");
+        const eventType = url.searchParams.get("eventType");
+        const limit = parseInt(url.searchParams.get("limit") || "100");
+
+        if (!projectId) return sendJson(res, 400, { error: "projectId required" });
+
+        const events = featureStore.getEvents(projectId, { featureId, eventType, limit });
+        return sendJson(res, 200, { events });
+      }
+
+      // ==================== FEATURE EXECUTION ENDPOINTS ====================
+
+      // Execute a specific feature
+      if (url.pathname.match(/^\/api\/v2\/features\/[^/]+\/execute$/) && req.method === "POST") {
+        const featureId = url.pathname.split("/")[4];
+
+        try {
+          const result = await featureManager.executeFeature(featureId);
+          return sendJson(res, 200, { ok: true, ...result });
+        } catch (err) {
+          return sendJson(res, 400, { error: err.message });
+        }
+      }
+
+      // Execute next runnable feature for a project
+      if (url.pathname.match(/^\/api\/v2\/projects\/[^/]+\/execute-next$/) && req.method === "POST") {
+        const projectId = url.pathname.split("/")[4];
+        try {
+          const result = await featureManager.executeNextRunnable(projectId);
+          if (!result) {
+            const blocked = featureManager.getBlockedFeatures(projectId) || [];
+            const blockedNames = blocked.map((b) => ({
+              id: b.id,
+              name: b.name,
+              dependsOn: b.depends_on || [],
+              status: b.status,
+            }));
+            return sendJson(res, 200, {
+              ok: false,
+              message: "No runnable features available",
+              blocked: blockedNames,
+            });
+          }
+          return sendJson(res, 200, { ok: true, ...result });
+        } catch (err) {
+          console.error("[ExecuteNext] Failed:", err);
+          return sendJson(res, 500, { ok: false, error: err.message || "execute-next failed" });
+        }
+      }
+
+      // Pause a running feature
+      if (url.pathname.match(/^\/api\/v2\/features\/[^/]+\/pause$/) && req.method === "POST") {
+        const featureId = url.pathname.split("/")[4];
+        const paused = featureManager.requestPause(featureId);
+        return sendJson(res, 200, { ok: paused, message: paused ? "Pause requested" : "Feature not running" });
+      }
+
+      // Abort a running feature
+      if (url.pathname.match(/^\/api\/v2\/features\/[^/]+\/abort$/) && req.method === "POST") {
+        const featureId = url.pathname.split("/")[4];
+        const aborted = featureManager.abortFeature(featureId);
+        return sendJson(res, 200, { ok: aborted, message: aborted ? "Aborted" : "Feature not running" });
+      }
+
+      // Resume a paused feature
+      if (url.pathname.match(/^\/api\/v2\/features\/[^/]+\/resume$/) && req.method === "POST") {
+        const featureId = url.pathname.split("/")[4];
+
+        try {
+          const result = await featureManager.resumeFeature(featureId);
+          return sendJson(res, 200, { ok: true, ...result });
+        } catch (err) {
+          return sendJson(res, 400, { error: err.message });
+        }
+      }
+
+      // Get execution status for a feature
+      if (url.pathname.match(/^\/api\/v2\/features\/[^/]+\/status$/) && req.method === "GET") {
+        const featureId = url.pathname.split("/")[4];
+        const status = featureManager.getExecutionStatus(featureId);
+        if (!status) {
+          return sendJson(res, 404, { error: "Feature not found" });
+        }
+        return sendJson(res, 200, status);
+      }
+
+      // Add subtask via chat (for feature adjustments)
+      if (url.pathname.match(/^\/api\/v2\/features\/[^/]+\/add-requirement$/) && req.method === "POST") {
+        const featureId = url.pathname.split("/")[4];
+        const { requirement, model } = body;
+
+        if (!requirement) {
+          return sendJson(res, 400, { error: "requirement is required" });
+        }
+
+        const feature = featureStore.getFeature(featureId);
+        if (!feature) {
+          return sendJson(res, 404, { error: "Feature not found" });
+        }
+
+        const project = featureStore.getProject(feature.project_id);
+        const plannerModel = model || project?.planner_model || llms.list()[0];
+
+        if (!plannerModel) {
+          return sendJson(res, 400, { error: "No planner model available" });
+        }
+
+        // Load context
+        const projectMdPath = path.join(project.folder_path, "project.md");
+        let projectMd = "";
+        try {
+          projectMd = fs.readFileSync(projectMdPath, "utf8");
+        } catch {}
+
+        const existingSubtasks = featureStore.getSubtasksByFeature(featureId);
+
+        const { addSubtasksFromRequirement } = require("./featurePlanner");
+        const newSubtasks = await addSubtasksFromRequirement({
+          feature,
+          requirement,
+          existingSubtasks,
+          context: { projectMd },
+          llmRegistry: llms,
+          plannerModel,
+        });
+
+        // Create new subtasks
+        const createdIds = [];
+        for (const st of newSubtasks) {
+          const id = featureStore.createSubtask({
+            featureId,
+            intent: st.intent,
+            applyType: st.apply?.type,
+            applyPath: st.apply?.path,
+          });
+          createdIds.push(id);
+        }
+
+        featureStore.recordEvent(project.id, featureId, null, "subtasks_added_from_requirement", {
+          requirement: requirement.substring(0, 100),
+          count: createdIds.length,
+        });
+
+        return sendJson(res, 200, {
+          ok: true,
+          subtasksAdded: createdIds.length,
+          subtaskIds: createdIds,
+        });
+      }
+
+      // Get project.md content
+      if (url.pathname === "/api/v2/project-md" && req.method === "GET") {
+        const projectId = url.searchParams.get("projectId");
+        if (!projectId) return sendJson(res, 400, { error: "projectId required" });
+
+        const project = featureStore.getProject(projectId);
+        if (!project) return sendJson(res, 404, { error: "project not found" });
+
+        const projectMdPath = path.join(project.folder_path, "project.md");
+        let content = "";
+        try {
+          content = fs.readFileSync(projectMdPath, "utf8");
+        } catch {
+          content = "";
+        }
+
+        return sendJson(res, 200, { content, path: projectMdPath });
+      }
+
+      // Update project.md content
+      if (url.pathname === "/api/v2/project-md" && req.method === "PUT") {
+        const { projectId, content } = body;
+        if (!projectId || content === undefined) {
+          return sendJson(res, 400, { error: "projectId and content required" });
+        }
+
+        const project = featureStore.getProject(projectId);
+        if (!project) return sendJson(res, 404, { error: "project not found" });
+
+        const projectMdPath = path.join(project.folder_path, "project.md");
+        fs.writeFileSync(projectMdPath, content, "utf8");
+
+        featureStore.recordEvent(projectId, null, null, "project_md_updated", {
+          length: content.length,
+        });
+
+        return sendJson(res, 200, { ok: true });
+      }
+
+      // ==================== TESTING ENDPOINTS ====================
+
+      // Get server status for a project
+      if (url.pathname.match(/^\/api\/test\/server\/[^/]+$/) && req.method === "GET") {
+        const projectId = url.pathname.split("/")[4];
+        const serverInfo = serverManager.getServerInfo(projectId);
+
+        if (!serverInfo) {
+          return sendJson(res, 200, { running: false });
+        }
+
+        return sendJson(res, 200, { running: true, ...serverInfo });
+      }
+
+      // Start dev server for a project
+      if (url.pathname.match(/^\/api\/test\/server\/[^/]+\/start$/) && req.method === "POST") {
+        const projectId = url.pathname.split("/")[4];
+
+        const project = featureStore.getProject(projectId);
+        if (!project) return sendJson(res, 404, { error: "project not found" });
+
+        try {
+          const { url: serverUrl, port } = await serverManager.startServer(project.folder_path, projectId);
+          return sendJson(res, 200, { ok: true, url: serverUrl, port });
+        } catch (err) {
+          return sendJson(res, 500, { error: err.message });
+        }
+      }
+
+      // Stop dev server for a project
+      if (url.pathname.match(/^\/api\/test\/server\/[^/]+\/stop$/) && req.method === "POST") {
+        const projectId = url.pathname.split("/")[4];
+
+        serverManager.stopServer(projectId);
+        return sendJson(res, 200, { ok: true });
+      }
+
+      // Test a specific feature
+      if (url.pathname.match(/^\/api\/test\/feature\/[^/]+$/) && req.method === "POST") {
+        const featureId = url.pathname.split("/")[4];
+
+        const feature = featureStore.getFeature(featureId);
+        if (!feature) return sendJson(res, 404, { error: "feature not found" });
+
+        const project = featureStore.getProject(feature.project_id);
+        if (!project) return sendJson(res, 404, { error: "project not found" });
+
+        try {
+          // Start server
+          const { url: serverUrl } = await serverManager.startServer(project.folder_path, project.id);
+
+          // Prepare screenshot path
+          const screenshotDir = path.join(project.folder_path, ".ultracode", "screenshots");
+          fs.mkdirSync(screenshotDir, { recursive: true });
+          const screenshotPath = path.join(screenshotDir, `${featureId}-${Date.now()}.png`);
+
+          // Run test
+          const testResult = await testRunner.testFeature({
+            url: serverUrl,
+            featureName: feature.name,
+            featureDescription: feature.description || "",
+            dod: feature.dod || "Feature works as described",
+            voteModel: project.vote_model || project.executor_model,
+            screenshotPath,
+          });
+
+          // Generate manual test instructions if needed
+          const manualInstructions = testRunner.generateManualTestInstructions(feature);
+
+          return sendJson(res, 200, {
+            ok: true,
+            testResult,
+            manualInstructions
+          });
+        } catch (err) {
+          return sendJson(res, 500, { error: err.message });
+        }
       }
 
       sendJson(res, 404, { error: "not found" });
