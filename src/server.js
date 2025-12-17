@@ -237,7 +237,7 @@ async function handleApi(req, res) {
 
       // Projects Endpoints
       if (url.pathname === "/api/projects/create" && req.method === "POST") {
-        const { name, agentModel, voteModel } = body;
+        const { name, agentModel, voteModel, planningModel } = body;
         if (!name) return sendJson(res, 400, { error: "name required" });
 
         const projectId = `project-${Date.now()}`;
@@ -246,6 +246,7 @@ async function handleApi(req, res) {
           name,
           agentModel,
           voteModel,
+          planningModel,
           createdAt: Date.now(),
           tasks: [],
         };
@@ -261,7 +262,7 @@ async function handleApi(req, res) {
       }
 
       if (url.pathname === "/api/tasks/run-demo" && req.method === "POST") {
-        const { model, voteModel } = body;
+        const { model, voteModel, planningModel } = body;
         if (!model) return sendJson(res, 400, { error: "model required" });
         const task = await createPlan({
           id: `task-${Date.now()}`,
@@ -269,6 +270,7 @@ async function handleApi(req, res) {
           goal: "Produce a greeting line and write it to out/demo.log",
           model,
           voteModel: voteModel || model,
+          planningModel: planningModel || model,
           filePath: "out/demo.log",
           llmRegistry: llms,
         });
@@ -284,7 +286,7 @@ async function handleApi(req, res) {
       }
 
       if (url.pathname === "/api/tasks/create" && req.method === "POST") {
-        const { title, goal, model, voteModel, filePath, k, nSamples, maxSamples, initialSamples, temperature, redFlags, projectId } = body;
+        const { title, goal, model, voteModel, planningModel, filePath, k, nSamples, maxSamples, initialSamples, temperature, redFlags, projectId } = body;
         if (!title || !goal || !model) {
           return sendJson(res, 400, { error: "title, goal, model required" });
         }
@@ -316,6 +318,7 @@ async function handleApi(req, res) {
 
         const agentProvider = ensureProvider(model);
         const voterProvider = voteModel ? ensureProvider(voteModel) : agentProvider;
+        const plannerProvider = planningModel ? ensureProvider(planningModel) : agentProvider;
 
         const task = await createPlan({
           id: `task-${Date.now()}`,
@@ -323,6 +326,7 @@ async function handleApi(req, res) {
           goal,
           model: agentProvider,
           voteModel: voterProvider,
+          planningModel: plannerProvider,
           filePath: filePath || "out/output.txt",
           llmRegistry: llms,
           // MAKER parameters
@@ -343,6 +347,7 @@ async function handleApi(req, res) {
           id: task.id,
           title: task.title,
           projectId: projectId,
+          planningModel: task.planningModel,
           status: "pending",
           createdAt: Date.now(),
         });
@@ -486,11 +491,14 @@ async function runTaskSequential(task) {
   const workspacePath = path.join(process.cwd(), "workspaces", task.id);
   fs.mkdirSync(workspacePath, { recursive: true });
   task.workspacePath = workspacePath;
+  const prevMeta = taskMeta.get(task.id) || {};
   taskMeta.set(task.id, {
+    ...prevMeta,
     id: task.id,
     title: task.title,
     status: task.status,
     workspacePath,
+    planningModel: task.planningModel,
   });
   stateStore.updateSection("workspace", () => workspacePath);
   const results = [];

@@ -80,14 +80,17 @@ const app = {
     async loadAvailableModels() {
         const agentSelect = document.getElementById('proj-agent');
         const voterSelect = document.getElementById('proj-voter');
+        const planningSelect = document.getElementById('proj-planning');
         
         // Save current selection if any
         const currentAgent = agentSelect.value;
         const currentVoter = voterSelect.value;
+        const currentPlanning = planningSelect.value;
 
         // Clear and add loading state
         agentSelect.innerHTML = '<option>Loading models...</option>';
         voterSelect.innerHTML = '<option value="">Same as Agent</option>';
+        planningSelect.innerHTML = '<option value="">Same as Agent</option>';
 
         const groups = {
             openai: { label: 'OpenAI', models: [] },
@@ -149,10 +152,12 @@ const app = {
 
         agentSelect.innerHTML = html;
         voterSelect.innerHTML = '<option value="">Same as Agent</option>' + html;
+        planningSelect.innerHTML = '<option value="">Same as Agent</option>' + html;
         
         // Restore selection if valid, else select first
         if (currentAgent) agentSelect.value = currentAgent;
         if (currentVoter) voterSelect.value = currentVoter;
+        if (currentPlanning) planningSelect.value = currentPlanning;
     },
 
     showCreateProjectModal(show = true) {
@@ -172,6 +177,7 @@ const app = {
         const goal = document.getElementById('proj-goal').value;
         const agentModel = document.getElementById('proj-agent').value;
         const voteModel = document.getElementById('proj-voter').value;
+        const planningModel = document.getElementById('proj-planning').value;
 
         // Capture MAKER parameters
         const k = parseInt(document.getElementById('proj-k').value) || 2;
@@ -192,7 +198,7 @@ const app = {
             const pRes = await fetch('/api/projects/create', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({ name, agentModel, voteModel })
+                body: JSON.stringify({ name, agentModel, voteModel, planningModel })
             });
             const pData = await pRes.json();
 
@@ -206,6 +212,7 @@ const app = {
                         goal: goal,
                         model: agentModel,
                         voteModel: voteModel,
+                        planningModel: planningModel,
                         projectId: pData.project.id,
                         // MAKER parameters
                         k: k,

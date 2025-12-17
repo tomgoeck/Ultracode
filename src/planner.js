@@ -8,12 +8,14 @@ const { v4: uuidv4 } = require("crypto");
  * @param {string} ctx.goal
  * @param {string} ctx.model
  * @param {string} ctx.voteModel
+ * @param {string} [ctx.planningModel] - optional model for planning (defaults to ctx.model)
  * @param {any} ctx.llmRegistry - access to the LLM to generate the plan
  */
-async function createPlan({ id, title, goal, model, voteModel, llmRegistry, k, nSamples, initialSamples, temperature, redFlags }) {
-  const provider = llmRegistry.get(model);
+async function createPlan({ id, title, goal, model, voteModel, planningModel, llmRegistry, k, nSamples, initialSamples, temperature, redFlags }) {
+  const plannerModel = planningModel || model;
+  const provider = llmRegistry.get(plannerModel);
   if (!provider) {
-    throw new Error(`Model ${model} not found`);
+    throw new Error(`Model ${plannerModel} not found`);
   }
   const defaultK = k || 2;
   const defaultMaxSamples = nSamples || 12; // nSamples acts as cap now
@@ -95,7 +97,7 @@ BAD Intents (generic):
 - "Add auth" (unclear where, unclear pattern)
 `;
 
-  console.log(`[Planner] Generating plan for: ${title}`);
+  console.log(`[Planner] Generating plan for: ${title} (planner=${plannerModel})`);
   const response = await provider.generate(prompt, { maxTokens: 2048, temperature: 0.3 });
   console.log(`[Planner] Response length: ${response?.length || 0} chars`);
 
@@ -140,6 +142,7 @@ BAD Intents (generic):
     goal,
     model,
     voteModel,
+    planningModel: plannerModel,
     k: defaultK,
     initialSamples: defaultInitialSamples,
     maxSamples: defaultMaxSamples,
