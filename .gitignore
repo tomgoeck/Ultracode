@@ -1,0 +1,12 @@
+# Ignore project artifacts and local data
+node_modules/
+.DS_Store
+data/
+out/
+workspaces/
+projects/
+
+# Logs and npm cache
+npm-debug.log*
+*.log
+

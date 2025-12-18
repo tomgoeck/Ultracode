@@ -18,7 +18,7 @@ class FeatureManager {
    * @param {import('./serverManager').ServerManager} opts.serverManager
    * @param {import('./testRunner').TestRunner} opts.testRunner
    */
-  constructor({ featureStore, orchestrator, llmRegistry, planFeature, broadcast, gitCommitter, serverManager, testRunner }) {
+  constructor({ featureStore, orchestrator, llmRegistry, planFeature, broadcast, gitCommitter, serverManager, testRunner, configStore }) {
     this.featureStore = featureStore;
     this.orchestrator = orchestrator;
     this.llmRegistry = llmRegistry;
@@ -27,6 +27,7 @@ class FeatureManager {
     this.gitCommitter = gitCommitter;
     this.serverManager = serverManager;
     this.testRunner = testRunner;
+    this.configStore = configStore;
 
     // Initialize ContextBuilder for intelligent context aggregation
     this.contextBuilder = new ContextBuilder(featureStore);
@@ -66,7 +67,12 @@ class FeatureManager {
    * @returns {boolean}
    */
   isRunnable(featureId) {
-    return this.featureStore.isFeatureRunnable(featureId);
+    const feature = this.featureStore.getFeature(featureId);
+    if (!feature) return false;
+    // Pending with deps met OR paused with deps met can run/resume
+    const depsMet = this.featureStore.areDependenciesMet(featureId);
+    if (!depsMet) return false;
+    return feature.status === "pending" || feature.status === "paused";
   }
 
   /**
@@ -100,6 +106,44 @@ class FeatureManager {
   }
 
   // ==================== FEATURE EXECUTION ====================
+
+  /**
+   * Ensure a provider is registered for a given model string (supports "provider:model" format).
+   * @param {string} modelStr
+   * @returns {string|null} registered provider key
+   */
+  _ensureProvider(modelStr) {
+    if (!modelStr) return null;
+    if (!modelStr.includes(":")) {
+      if (!this.llmRegistry.has(modelStr)) {
+        throw new Error(`Provider not registered: ${modelStr}`);
+      }
+      return modelStr;
+    }
+
+    const [providerType, modelName] = modelStr.split(":", 2);
+    const providerKey = `${providerType}:${modelName}`;
+    if (this.llmRegistry.has(providerKey)) {
+      return providerKey;
+    }
+
+    const { createProvider } = require("./providerFactory");
+    const apiKey = this.configStore?.getKey(providerType);
+    if (!apiKey && (providerType === "openai" || providerType === "claude" || providerType === "gemini")) {
+      throw new Error(`API key for provider "${providerType}" is missing. Please configure it in settings.`);
+    }
+
+    const cfg = {
+      name: providerKey,
+      type: providerType,
+      apiKey,
+      model: modelName,
+    };
+
+    this.llmRegistry.register(providerKey, createProvider(cfg));
+    console.log(`[FeatureManager] Auto-registered provider: ${providerKey}`);
+    return providerKey;
+  }
 
   /**
    * Execute a specific feature.
@@ -164,6 +208,13 @@ class FeatureManager {
     let finalStatus = "completed";
 
     try {
+      const plannerModel = this._ensureProvider(project.planner_model);
+      const executorModel = this._ensureProvider(project.executor_model);
+      const voteModel = this._ensureProvider(project.vote_model || project.executor_model);
+      if (!plannerModel) throw new Error("No planner model configured for project");
+      if (!executorModel) throw new Error("No executor model configured for project");
+      if (!voteModel) throw new Error("No vote model configured for project");
+
       // Step 1: Plan the feature into subtasks if needed
       let subtasks = this.featureStore.getSubtasksByFeature(featureId);
       if (subtasks.length === 0) {
@@ -184,6 +235,8 @@ class FeatureManager {
           context,
           llmRegistry: this.llmRegistry,
           plannerModel,
+          fallbackModels: [executorModel, voteModel],
+          configStore: this.configStore,
         });
 
         // Create subtasks in database
@@ -224,15 +277,21 @@ class FeatureManager {
         this.broadcast({ type: "subtask-started", projectId: project.id, featureId, subtaskId: subtask.id, subtask });
 
         try {
+          // Re-ensure models before each subtask in case registry was pruned/restarted
+          const execModelKey = this._ensureProvider(project.executor_model || executorModel);
+          const voteModelKey = this._ensureProvider(project.vote_model || project.executor_model || voteModel);
+
           // Build task object for orchestrator
           const task = {
             id: `task-${featureId}-${subtask.id}`,
             title: `${feature.name}: ${subtask.intent}`,
             goal: subtask.intent,
-            model: project.executor_model,
-            voteModel: project.vote_model || project.executor_model,
+            model: execModelKey,
+            voteModel: voteModelKey || execModelKey,
             k: 2,
             nSamples: 3,
+            projectId: project.id,
+            featureId,
             steps: [
               {
                 id: subtask.id,
@@ -275,17 +334,8 @@ class FeatureManager {
         }
       }
 
-      // Step 3: Run automated tests if configured
-      if (finalStatus === "completed" && this.testRunner && this.serverManager) {
-        const testResult = await this._testFeature(feature, project, options);
-        if (testResult) {
-          if (testResult.passed) {
-            finalStatus = "verified";
-          } else {
-            finalStatus = "failed";
-          }
-        }
-      }
+      // Step 3: Automated tests disabled (temporary)
+      // (Previously: run tests and add fix subtasks/retries on failure)
 
       // Step 4: Update feature status
       if (finalStatus === "completed" || finalStatus === "verified") {
@@ -419,6 +469,8 @@ class FeatureManager {
     this.broadcast({ type: "feature-testing", projectId: project.id, featureId: feature.id });
 
     try {
+      const voteModel = this._ensureProvider(project.vote_model || project.executor_model);
+
       // Start dev server
       const { url } = await this.serverManager.startServer(project.folder_path, project.id);
 
@@ -433,7 +485,7 @@ class FeatureManager {
         featureName: feature.name,
         featureDescription: feature.description || "",
         dod: feature.dod,
-        voteModel: project.vote_model || project.executor_model,
+        voteModel,
         screenshotPath,
       });
 
@@ -483,7 +535,23 @@ class FeatureManager {
    * @param {string} projectId
    * @returns {Promise<Object|null>}
    */
-  async executeNextRunnable(projectId) {
+async executeNextRunnable(projectId) {
+  // Prefer resuming paused features first (by priority/order)
+  const paused = this.featureStore
+    .getFeaturesByProject(projectId)
+    .filter((f) => f.status === "paused")
+    .filter((f) => this.isRunnable(f.id)); // skip paused-but-blocked features
+  if (paused.length > 0) {
+    const priorityRank = { A: 1, B: 2, C: 3 };
+    paused.sort((a, b) => {
+      const pr = (priorityRank[a.priority] || 99) - (priorityRank[b.priority] || 99);
+      if (pr !== 0) return pr;
+        return (a.order_index || 0) - (b.order_index || 0);
+      });
+      const featureToResume = paused[0];
+      return this.resumeFeature(featureToResume.id);
+    }
+
     const feature = this.getNextRunnable(projectId);
     if (!feature) {
       return null;
@@ -498,6 +566,7 @@ class FeatureManager {
   requestPause(featureId) {
     if (this.runningFeatures.has(featureId)) {
       this.pauseRequested.add(featureId);
+      this.broadcast({ type: "feature-pause-requested", featureId });
       return true;
     }
     return false;

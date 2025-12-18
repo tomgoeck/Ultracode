@@ -12,7 +12,9 @@ class LMStudioProvider {
 
   async generate(prompt, options = {}) {
     const temp = options.temperature ?? 0.2;
-    const maxTokens = options.maxTokens ?? 512;
+    // Cap at a safe value to avoid LM Studio context overflows on smaller models
+    const requested = options.maxTokens ?? 30000;
+    const maxTokens = Math.min(requested, 5000);
 
     // Try completions endpoint first (some LM Studio builds expect /completions)
     const completionBody = {

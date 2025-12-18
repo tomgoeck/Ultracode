@@ -218,6 +218,24 @@ Example:
           ", "
         )}], top=${top.join(" | ")}`
       );
+
+      // Broadcast vote summary for UI transparency
+      this.emitEvent({
+        type: "vote-summary",
+        taskId: task.id,
+        projectId: task.projectId,
+        featureId: task.featureId,
+        stepId: step.id,
+        samples: candidates.length,
+        unique: counts.size,
+        k: voteConfig.k,
+        leadBy,
+        winnerVotes: winner?.voteCount || 0,
+        marginMet: achievedMargin,
+        temps,
+        top,
+        winnerPreview: (winner?.output || "").slice(0, 200),
+      });
     }
 
     if (!winner) {

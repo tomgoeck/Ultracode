@@ -153,33 +153,85 @@ function parseSubtasks(response) {
  * @param {string} opts.plannerModel - Name of the planner model to use
  * @returns {Promise<Array<Object>>} Array of subtasks
  */
-async function planFeature({ feature, project, context, llmRegistry, plannerModel }) {
-  // Get the planner provider
-  const provider = llmRegistry.get(plannerModel);
-  if (!provider) {
-    throw new Error(`Planner model not found: ${plannerModel}`);
-  }
+async function planFeature({ feature, project, context, llmRegistry, plannerModel, configStore, fallbackModels = [] }) {
+  // Ensure provider is registered (dynamic registration for "provider:model" format)
+  const ensureProvider = (modelStr) => {
+    if (!modelStr.includes(':')) {
+      return modelStr;
+    }
+    const [providerType, modelName] = modelStr.split(':', 2);
+    const providerKey = `${providerType}:${modelName}`;
+    if (llmRegistry.has(providerKey)) return providerKey;
 
-  // Build the prompt
+    // Register on-demand
+    const { createProvider } = require('./providerFactory');
+    const keys = configStore ? configStore.getKeys() : {};
+    const apiKey = keys[providerType];
+    const cfg = {
+      name: providerKey,
+      type: providerType,
+      apiKey,
+      model: modelName,
+    };
+    llmRegistry.register(providerKey, createProvider(cfg));
+    console.log(`[FeaturePlanner] Auto-registered provider: ${providerKey}`);
+    return providerKey;
+  };
+
+  const modelToUse = ensureProvider(plannerModel);
+
+  const tryModels = [modelToUse, ...fallbackModels.map(m => ensureProvider(m)).filter(Boolean)];
   const prompt = buildPlannerPrompt(feature, context);
-
   console.log(`[FeaturePlanner] Planning feature: ${feature.name}`);
   console.log(`[FeaturePlanner] Using model: ${plannerModel}`);
 
-  // Generate the plan
-  const response = await provider.generate(prompt, {
-    temperature: 0.3,
-    maxTokens: 2000,
-  });
+  let bestSubtasks = null;
+  let lastError = null;
 
-  // Parse subtasks
-  const subtasks = parseSubtasks(response);
+  for (const m of tryModels) {
+    try {
+      const provider = llmRegistry.get(m);
+      if (!provider) {
+        lastError = new Error(`Planner model not found: ${m}`);
+        continue;
+      }
 
-  console.log(`[FeaturePlanner] Generated ${subtasks.length} subtasks`);
+      const response = await provider.generate(prompt, {
+        temperature: 0.3,
+        maxTokens: 10000,
+      });
+
+      if (!response || !response.trim()) {
+        lastError = new Error(`Empty response from model ${m}`);
+        continue;
+      }
+
+      const subtasks = parseSubtasks(response);
+      const looksFallback =
+        subtasks.length === 1 &&
+        (subtasks[0].intent?.startsWith("Implement feature:") ||
+          subtasks[0].apply?.path === "src/feature-output.txt");
+
+      console.log(`[FeaturePlanner] Model ${m} produced ${subtasks.length} subtasks${looksFallback ? " (fallback-like)" : ""}`);
+
+      // Prefer non-fallback results with more than 1 subtask
+      if (!looksFallback && subtasks.length > 1) {
+        bestSubtasks = subtasks;
+        break;
+      }
+
+      // Keep best candidate so far
+      bestSubtasks = bestSubtasks || subtasks;
+    } catch (err) {
+      lastError = err;
+      console.error(`[FeaturePlanner] Error with model ${m}:`, err.message);
+    }
+  }
+
+  const finalSubtasks = bestSubtasks && bestSubtasks.length > 0 ? bestSubtasks : [{ intent: `Implement feature: ${feature.name}`, apply: { type: "writeFile", path: "src/feature-output.txt" } }];
 
   // Validate subtasks
-  const validatedSubtasks = subtasks.map((st, idx) => {
-    // Ensure each subtask has required fields
+  const validatedSubtasks = finalSubtasks.map((st, idx) => {
     return {
       intent: st.intent || `Subtask ${idx + 1}`,
       apply: {
@@ -188,6 +240,10 @@ async function planFeature({ feature, project, context, llmRegistry, plannerMode
       },
     };
   });
+
+  if (!bestSubtasks && lastError) {
+    console.warn("[FeaturePlanner] Falling back to minimal subtasks due to errors:", lastError.message);
+  }
 
   return validatedSubtasks;
 }
@@ -202,10 +258,35 @@ async function planFeature({ feature, project, context, llmRegistry, plannerMode
  * @param {string} opts.plannerModel
  * @returns {Promise<Array<Object>>} New subtasks to add
  */
-async function addSubtasksFromRequirement({ feature, requirement, existingSubtasks, context, llmRegistry, plannerModel }) {
-  const provider = llmRegistry.get(plannerModel);
+async function addSubtasksFromRequirement({ feature, requirement, existingSubtasks, context, llmRegistry, plannerModel, configStore }) {
+  // Ensure provider is registered (same logic as planFeature)
+  const ensureProvider = (modelStr) => {
+    if (!modelStr.includes(':')) {
+      return modelStr;
+    }
+    const [providerType, modelName] = modelStr.split(':', 2);
+    const providerKey = `${providerType}:${modelName}`;
+    if (llmRegistry.has(providerKey)) return providerKey;
+
+    const { createProvider } = require('./providerFactory');
+    const keys = configStore ? configStore.getKeys() : {};
+    const apiKey = keys[providerType];
+    const cfg = {
+      name: providerKey,
+      type: providerType,
+      apiKey,
+      model: modelName,
+    };
+    llmRegistry.register(providerKey, createProvider(cfg));
+    console.log(`[FeaturePlanner] Auto-registered provider: ${providerKey}`);
+    return providerKey;
+  };
+
+  const modelToUse = ensureProvider(plannerModel);
+
+  const provider = llmRegistry.get(modelToUse);
   if (!provider) {
-    throw new Error(`Planner model not found: ${plannerModel}`);
+    throw new Error(`Planner model not found: ${modelToUse}`);
   }
 
   const existingSubtasksText = existingSubtasks

@@ -54,6 +54,8 @@ const paraphraser = new PromptParaphraser(llms, "gpt-4o-mini"); // Use cheap mod
 const gitCommitter = new GitCommitter(process.cwd()); // Auto-commit task completions
 const snapshotStore = new SnapshotStore(path.join(process.cwd(), "data", "snapshots.db"));
 const featureStore = new FeatureStore(path.join(process.cwd(), "data", "features.db"));
+// Clear any stale "running" features from abrupt shutdowns
+featureStore.resetRunningFeatures("failed");
 
 // Initialize Tavily provider for web search (if API key is configured)
 const tavilyApiKey = configStore.getKey("tavily");
@@ -107,6 +109,7 @@ featureManager = new FeatureManager({
   gitCommitter,
   serverManager,
   testRunner,
+  configStore,
 });
 
 const pendingCommands = new Map(pendingStore.list().map((c) => [c.id, c]));
@@ -120,6 +123,24 @@ const TASKS_FILE = path.join(process.cwd(), "data", "tasks.json");
 const projects = new Map(); // projectId -> project metadata
 let taskMeta = new Map(); // taskId -> task metadata
 const activeTasks = new Map(); // taskId -> full task object (in-memory only)
+
+function getWorkspacePathFromId(id) {
+  if (!id) return null;
+
+  // Active/planned tasks
+  const meta = taskMeta.get(id);
+  if (meta?.workspacePath) return meta.workspacePath;
+
+  // FeatureStore project
+  const project = featureStore.getProject(id);
+  if (project?.folder_path) return project.folder_path;
+
+  // Legacy projects map (if any)
+  const legacy = projects.get(id);
+  if (legacy?.folderPath) return legacy.folderPath;
+
+  return null;
+}
 
 function saveTasks() {
   const data = {
@@ -452,10 +473,10 @@ async function handleApi(req, res) {
       if (url.pathname === "/api/workspace/tree" && req.method === "GET") {
         const taskId = url.searchParams.get("taskId");
         if (!taskId) return sendJson(res, 400, { error: "taskId required" });
-        const meta = taskMeta.get(taskId);
-        if (!meta || !meta.workspacePath) return sendJson(res, 404, { error: "task not found" });
-        const tree = listFiles(meta.workspacePath);
-        return sendJson(res, 200, { workspacePath: meta.workspacePath, tree });
+        const workspacePath = getWorkspacePathFromId(taskId);
+        if (!workspacePath) return sendJson(res, 404, { error: "workspace not found" });
+        const tree = listFiles(workspacePath);
+        return sendJson(res, 200, { workspacePath, tree });
       }
 
       if (url.pathname === "/api/state" && req.method === "GET") {
@@ -493,13 +514,8 @@ async function handleApi(req, res) {
         }
 
         // Get workspace path from task metadata
-        let workspacePath = process.cwd();
-        if (taskId) {
-          const meta = taskMeta.get(taskId);
-          if (meta && meta.workspacePath) {
-            workspacePath = meta.workspacePath;
-          }
-        }
+        let workspacePath = taskId ? getWorkspacePathFromId(taskId) : null;
+        if (!workspacePath) workspacePath = process.cwd();
 
         const guard = new ProjectGuard(workspacePath);
         const before = await guard.readFile(filePath).catch(() => "");
@@ -768,6 +784,49 @@ async function handleApi(req, res) {
         return sendJson(res, 200, { project, features, stats });
       }
 
+      // Dev server controls
+      if (url.pathname.match(/^\/api\/v2\/projects\/[^/]+\/dev-server\/start$/) && req.method === "POST") {
+        const projectId = url.pathname.split("/")[4];
+        const project = featureStore.getProject(projectId);
+        if (!project) return sendJson(res, 404, { error: "project not found" });
+        try {
+          const info = await serverManager.startServer(project.folder_path, projectId);
+          return sendJson(res, 200, { ok: true, ...info });
+        } catch (err) {
+          return sendJson(res, 500, { error: err.message });
+        }
+      }
+
+      if (url.pathname.match(/^\/api\/v2\/projects\/[^/]+\/dev-server\/stop$/) && req.method === "POST") {
+        const projectId = url.pathname.split("/")[4];
+        serverManager.stopServer(projectId);
+        return sendJson(res, 200, { ok: true });
+      }
+
+      if (url.pathname.match(/^\/api\/v2\/projects\/[^/]+\/dev-server$/) && req.method === "GET") {
+        const projectId = url.pathname.split("/")[4];
+        const info = serverManager.getServerInfo(projectId);
+        return sendJson(res, 200, { running: !!info, info });
+      }
+
+      // Update project models
+      if (url.pathname.match(/^\/api\/v2\/projects\/[^/]+\/models$/) && req.method === "POST") {
+        const projectId = url.pathname.split("/").pop();
+        const { plannerModel, executorModel, voteModel } = body;
+        const project = featureStore.getProject(projectId);
+        if (!project) return sendJson(res, 404, { error: "project not found" });
+        if (!plannerModel || !executorModel) {
+          return sendJson(res, 400, { error: "plannerModel and executorModel are required" });
+        }
+        featureStore.updateProject(projectId, {
+          plannerModel,
+          executorModel,
+          voteModel: voteModel || executorModel,
+        });
+        const updated = featureStore.getProject(projectId);
+        return sendJson(res, 200, { ok: true, project: updated });
+      }
+
       // Delete project
       if (url.pathname.match(/^\/api\/v2\/projects\/[^/]+$/) && req.method === "DELETE") {
         const projectId = url.pathname.split("/").pop();
@@ -804,6 +863,14 @@ async function handleApi(req, res) {
 
         const features = featureStore.getFeaturesByProject(projectId);
         return sendJson(res, 200, { features });
+      }
+
+      // Get single feature by id
+      if (url.pathname.match(/^\/api\/v2\/features\/[^/]+$/) && req.method === "GET") {
+        const featureId = url.pathname.split("/").pop();
+        const feature = featureStore.getFeature(featureId);
+        if (!feature) return sendJson(res, 404, { error: "feature not found" });
+        return sendJson(res, 200, { feature });
       }
 
       // Get next runnable feature
@@ -978,6 +1045,51 @@ async function handleApi(req, res) {
         }
       }
 
+      // Retry a failed feature (reset to pending and clear subtasks)
+      if (url.pathname.match(/^\/api\/v2\/features\/[^/]+\/retry$/) && req.method === "POST") {
+        const featureId = url.pathname.split("/")[4];
+
+        try {
+          const feature = featureStore.getFeature(featureId);
+          if (!feature) {
+            return sendJson(res, 404, { error: "Feature not found" });
+          }
+
+          // Reset existing subtasks to pending (continue from last failed)
+          const subtasks = featureStore.getSubtasksByFeature(featureId);
+          for (const subtask of subtasks) {
+            const newStatus = subtask.status === "completed" ? "completed" : "pending";
+            featureStore.updateSubtask(subtask.id, {
+              status: newStatus,
+              result: null,
+              error: null,
+            });
+          }
+
+          // Reset feature to pending
+          featureStore.updateFeature(featureId, {
+            status: 'pending',
+            technicalSummary: null
+          });
+
+          featureStore.recordEvent(feature.project_id, featureId, null, "feature_retried", {
+            previousStatus: feature.status,
+            subtasksReset: subtasks.length
+          });
+
+          broadcast({ type: "feature-retried", featureId, featureName: feature.name });
+
+          return sendJson(res, 200, {
+            ok: true,
+            message: `Feature "${feature.name}" reset to pending. Ready for re-execution.`,
+            subtasksReset: subtasks.length
+          });
+        } catch (err) {
+          console.error("[Retry Feature] Failed:", err);
+          return sendJson(res, 500, { error: err.message });
+        }
+      }
+
       // Get execution status for a feature
       if (url.pathname.match(/^\/api\/v2\/features\/[^/]+\/status$/) && req.method === "GET") {
         const featureId = url.pathname.split("/")[4];
@@ -1026,6 +1138,7 @@ async function handleApi(req, res) {
           context: { projectMd },
           llmRegistry: llms,
           plannerModel,
+          configStore,
         });
 
         // Create new subtasks

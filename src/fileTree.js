@@ -7,6 +7,9 @@ function listFiles(root, relative = ".", flat = true) {
   const result = [];
 
   for (const e of entries) {
+    // Skip hidden files/folders (e.g., .git, .DS_Store)
+    if (e.name.startsWith(".")) continue;
+
     const relPath = path.join(relative, e.name);
     const name = e.name;
 

@@ -3,6 +3,9 @@ const app = {
         projects: [],
         activeProject: null,
         activeFeature: null,
+        runningFeatureId: null,
+        stoppingFeatureId: null,
+        devServer: null,
         sse: null,
         wizard: {
             currentPage: 1,
@@ -11,6 +14,56 @@ const app = {
             projectDescription: '',
             summary: null,
             sessionId: null
+        },
+        modelModal: {
+            loaded: false
+        }
+    },
+
+    initSortableFeatures() {
+        const list = document.getElementById('feature-list');
+        if (!list) return;
+        // Only enable dragging for B/C; A stays fixed
+        new SimpleSorter(list, {
+            onUpdate: (order) => {
+                // Filter to B/C and preserve A order at top
+                const reordered = [];
+                const features = this.state.features || {};
+                // Add existing A features first in current order
+                Object.values(features)
+                    .filter(f => f.priority === 'A')
+                    .sort((a, b) => (a.order_index || 0) - (b.order_index || 0))
+                    .forEach((f, idx) => reordered.push({ id: f.id, orderIndex: idx + 1 }));
+
+                // Now append dragged B/C in new order
+                order.forEach((item, idx) => {
+                    const f = features[item.id];
+                    if (!f || f.priority === 'A') return; // skip A
+                    reordered.push({ id: item.id, orderIndex: reordered.length + 1 });
+                });
+
+                this.saveFeatureOrdering(reordered);
+            }
+        });
+    },
+
+    async saveFeatureOrdering(ordering) {
+        if (!this.state.activeProject || !ordering.length) return;
+        try {
+            const res = await fetch('/api/v2/features/reorder', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ projectId: this.state.activeProject, ordering })
+            });
+            const data = await res.json();
+            if (!res.ok || !data.ok) {
+                throw new Error(data.error || 'Failed to reorder features');
+            }
+            this.logToTerminal('✓ Feature order updated');
+            this.loadFeatures(this.state.activeProject);
+        } catch (e) {
+            console.error('Failed to reorder features', e);
+            this.logToTerminal(`✗ Failed to reorder features: ${e.message}`);
         }
     },
 
@@ -55,7 +108,7 @@ const app = {
                             </div>
                             <button
                                 onclick="event.stopPropagation(); app.confirmDeleteProject('${p.id}', '${this.escapeHtml(p.name).replace(/'/g, "\\'")}');"
-                                class="absolute top-4 right-4 opacity-0 group-hover:opacity-100 transition-opacity p-2 hover:bg-red-900/20 rounded text-red-400 hover:text-red-300"
+                                class="absolute bottom-4 right-4 opacity-0 group-hover:opacity-100 transition-opacity p-2 hover:bg-red-900/20 rounded text-red-400 hover:text-red-300"
                                 title="Delete project">
                                 <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
                                     <path fill-rule="evenodd" d="M9 2a1 1 0 00-.894.553L7.382 4H4a1 1 0 000 2v10a2 2 0 002 2h8a2 2 0 002-2V6a1 1 0 100-2h-3.382l-.724-1.447A1 1 0 0011 2H9zM7 8a1 1 0 012 0v6a1 1 0 11-2 0V8zm5-1a1 1 0 00-1 1v6a1 1 0 102 0V8a1 1 0 00-1-1z" clip-rule="evenodd" />
@@ -82,6 +135,146 @@ const app = {
             this.loadKeys();
         } else {
             modal.style.display = 'none';
+        }
+    },
+
+    // ==================== MODEL SETTINGS ====================
+
+    async showModelModal() {
+        if (!this.state.activeProject) {
+            alert('Select a project first');
+            return;
+        }
+        await this.loadModelOptions();
+        await this.prefillModelSelection();
+        const modal = document.getElementById('modal-models');
+        modal.classList.remove('hidden');
+        modal.style.display = 'flex';
+    },
+
+    hideModelModal() {
+        const modal = document.getElementById('modal-models');
+        modal.classList.add('hidden');
+        modal.style.display = 'none';
+    },
+
+    async loadModelOptions() {
+        const plannerSelect = document.getElementById('model-planner');
+        const executorSelect = document.getElementById('model-executor');
+        const voteSelect = document.getElementById('model-vote');
+
+        [plannerSelect, executorSelect, voteSelect].forEach(sel => {
+            sel.innerHTML = '<option>Loading models...</option>';
+        });
+
+        const groups = {
+            openai: { label: 'OpenAI', models: [] },
+            anthropic: { label: 'Anthropic', models: [] },
+            gemini: { label: 'Gemini', models: [] },
+            lmstudio: { label: 'Local', models: [] }
+        };
+
+        // Get Keys
+        const kRes = await fetch('/api/config/keys');
+        const kData = await kRes.json();
+        const keys = kData.keys || {};
+
+        // Probe models helper
+        const probe = async (type, apiKey, baseUrl) => {
+            try {
+                const res = await fetch('/api/providers/probe-models', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ type, apiKey, baseUrl })
+                });
+                const data = await res.json();
+                if (data.models) {
+                    groups[type].models = data.models;
+                }
+            } catch(e) { console.error(`Failed to probe ${type}`, e); }
+        };
+
+        const promises = [];
+        if (keys.openai) promises.push(probe('openai', keys.openai));
+        if (keys.anthropic) promises.push(probe('anthropic', keys.anthropic));
+        if (keys.gemini) promises.push(probe('gemini', keys.gemini));
+        promises.push(probe('lmstudio', '', 'http://localhost:1234/v1'));
+
+        await Promise.all(promises);
+
+        const buildOptions = () => {
+            let html = '';
+            for (const [type, group] of Object.entries(groups)) {
+                if (group.models.length > 0) {
+                    html += `<optgroup label="${group.label}">`;
+                    group.models.forEach(m => {
+                        const id = m.includes(':') ? m : `${type}:${m}`;
+                        html += `<option value="${id}">${m}</option>`;
+                    });
+                    html += `</optgroup>`;
+                }
+            }
+            if (html === '') {
+                html = `<option value="" disabled>No API keys set. Please configure in Settings.</option>`;
+            }
+            return html;
+        };
+
+        const optionsHtml = buildOptions();
+        plannerSelect.innerHTML = optionsHtml;
+        executorSelect.innerHTML = optionsHtml;
+        voteSelect.innerHTML = '<option value="">Same as Executor</option>' + optionsHtml;
+    },
+
+    async prefillModelSelection() {
+        if (!this.state.activeProject) return;
+        try {
+            const res = await fetch(`/api/v2/projects/${this.state.activeProject}`);
+            const data = await res.json();
+            const proj = data.project;
+            if (!proj) return;
+            document.getElementById('model-planner').value = proj.planner_model || '';
+            document.getElementById('model-executor').value = proj.executor_model || '';
+            document.getElementById('model-vote').value = proj.vote_model || '';
+        } catch (e) {
+            console.error('Failed to prefill models', e);
+        }
+    },
+
+    async saveModelSettings() {
+        if (!this.state.activeProject) {
+            alert('No project selected');
+            return;
+        }
+        const plannerModel = document.getElementById('model-planner').value;
+        const executorModel = document.getElementById('model-executor').value;
+        const voteModel = document.getElementById('model-vote').value;
+
+        if (!plannerModel || !executorModel) {
+            alert('Planner and Executor models are required');
+            return;
+        }
+
+        try {
+            const res = await fetch(`/api/v2/projects/${this.state.activeProject}/models`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ plannerModel, executorModel, voteModel })
+            });
+            const data = await res.json();
+            if (res.ok && data.ok) {
+                this.logToTerminal('✓ Updated project models');
+                this.hideModelModal();
+                // refresh features to reflect any running state changes
+                if (this.state.activeProject) {
+                    this.loadFeatures(this.state.activeProject);
+                }
+            } else {
+                throw new Error(data.error || 'Failed to save models');
+            }
+        } catch (e) {
+            console.error('Failed to save models', e);
+            alert(`Failed to save models: ${e.message}`);
         }
     },
 
@@ -315,6 +508,7 @@ const app = {
     async openProject(projectId) {
         this.state.activeProject = projectId;
         this.state.activeFeature = null;
+        this.state.devServer = null;
 
         // Switch to dashboard view
         document.getElementById('view-projects').classList.add('hidden');
@@ -326,6 +520,7 @@ const app = {
 
         // Load features for this project
         await this.loadFeatures(projectId);
+        await this.fetchDevServerInfo();
     },
 
     confirmDeleteProject(projectId, projectName) {
@@ -388,7 +583,22 @@ const app = {
             const featureList = document.getElementById('feature-list');
 
             if (data.features && data.features.length > 0) {
+                // Store features in state for dependency lookups
+                this.state.features = data.features.reduce((acc, f) => {
+                    acc[f.id] = f;
+                    return acc;
+                }, {});
+
+                // Track running feature (first running found)
+                const running = data.features.find(f => f.status === 'running');
+                this.state.runningFeatureId = running ? running.id : null;
+                if (!this.state.runningFeatureId) {
+                    this.state.stoppingFeatureId = null;
+                }
+                this.updateExecuteButton();
+
                 featureList.innerHTML = data.features.map(f => this.renderFeatureItem(f)).join('');
+                this.initSortableFeatures();
             } else {
                 featureList.innerHTML = `
                     <div class="text-center py-8 text-gray-500 text-xs">
@@ -439,24 +649,67 @@ const app = {
         const isActive = this.state.activeFeature === feature.id;
         const activeClass = isActive ? 'bg-blue-900/30 border-blue-600' : 'border-gray-700 hover:border-gray-600';
 
+        const retryButton = feature.status === 'failed' ? `
+            <button
+                onclick="event.stopPropagation(); app.retryFeature('${feature.id}');"
+                class="mt-2 w-full px-2 py-1 bg-orange-600 hover:bg-orange-500 rounded text-white text-xs font-medium transition-colors"
+                title="Retry this feature">
+                🔄 Retry
+            </button>
+        ` : '';
+
         return `
             <div onclick="app.selectFeature('${feature.id}')"
                 class="feature-item p-3 rounded-lg border ${activeClass} ${priorityColor} cursor-pointer transition-all"
-                data-feature-id="${feature.id}">
+                data-feature-id="${feature.id}"
+                data-sort-id="${feature.id}">
                 <div class="flex items-start justify-between mb-1">
                     <div class="flex items-center gap-2">
-                        <span class="text-sm font-mono font-bold text-gray-400">${feature.priority}</span>
+                        <span class="text-[11px] font-mono font-bold text-gray-400">${feature.priority}</span>
                         <span class="text-xs">${icon}</span>
+                        <span class="text-[11px] font-mono text-gray-500">${feature.id || ''}</span>
                     </div>
                     <span class="text-[10px] px-1.5 py-0.5 rounded ${statusColor}">${feature.status}</span>
                 </div>
                 <h4 class="font-medium text-sm text-gray-200 mb-1">${this.escapeHtml(feature.name)}</h4>
                 <p class="text-xs text-gray-500 line-clamp-2">${this.escapeHtml(feature.description || '')}</p>
-                ${feature.depends_on && feature.depends_on.length > 0 ? `
-                    <div class="mt-2 text-[10px] text-gray-600">
-                        🔒 Depends on ${feature.depends_on.length} feature(s)
-                    </div>
-                ` : ''}
+                ${this.renderDependencyInfo(feature)}
+                ${retryButton}
+            </div>
+        `;
+    },
+
+    renderDependencyInfo(feature) {
+        if (!feature.depends_on || feature.depends_on.length === 0) {
+            return '';
+        }
+
+        const allFeatures = this.state.features || {};
+        const deps = feature.depends_on.map(depId => {
+            const depFeature = allFeatures[depId];
+            if (!depFeature) {
+                return `<span class="text-red-400">${depId} (not found)</span>`;
+            }
+
+            const isCompleted = depFeature.status === 'completed' || depFeature.status === 'verified';
+            const icon = isCompleted ? '✓' : '○';
+            const color = isCompleted ? 'text-green-400' : 'text-yellow-400';
+
+            return `<span class="${color}">${icon} ${this.escapeHtml(depFeature.name)}</span>`;
+        }).join(', ');
+
+        // Check if feature is blocked (pending with incomplete dependencies)
+        const isBlocked = feature.status === 'pending' && feature.depends_on.some(depId => {
+            const dep = allFeatures[depId];
+            return !dep || (dep.status !== 'completed' && dep.status !== 'verified');
+        });
+
+        const icon = isBlocked ? '🔒' : '🔗';
+        const textColor = isBlocked ? 'text-orange-400' : 'text-gray-600';
+
+        return `
+            <div class="mt-2 text-[10px] ${textColor}">
+                ${icon} Depends on: ${deps}
             </div>
         `;
     },
@@ -559,6 +812,11 @@ const app = {
     // ==================== FEATURE EXECUTION ====================
 
     async executeNext() {
+        // If a feature is running, treat this as STOP (pause after current subtask)
+        if (this.state.runningFeatureId) {
+            return this.stopExecution();
+        }
+
         if (!this.state.activeProject) {
             alert('No project selected');
             return;
@@ -576,38 +834,96 @@ const app = {
             const data = await res.json();
 
             if (data.started || data.ok) {
+                this.state.runningFeatureId = data.featureId || null;
+                this.updateExecuteButton();
                 this.logToTerminal(`✓ Started execution of feature: ${data.featureName || 'unknown'}`);
                 await this.loadFeatures(this.state.activeProject);
             } else if (data.message) {
+                // Resolve dependency IDs to names
+                const allFeatures = this.state.features || {};
                 const blockedInfo = data.blocked && data.blocked.length
-                    ? `\nBlocked: ${data.blocked.map(b => `${b.name} (deps: ${(b.dependsOn || []).join(', ') || 'none'})`).join(' | ')}`
+                    ? `\n\n📋 Blocked features:\n${data.blocked.map(b => {
+                        const depNames = (b.dependsOn || []).map(depId => {
+                            const dep = allFeatures[depId];
+                            return dep ? dep.name : depId;
+                        });
+                        return `  • ${b.name} (waiting for: ${depNames.join(', ') || 'unknown'})`;
+                    }).join('\n')}`
                     : '';
                 const msg = `${data.message}${blockedInfo}`;
-                this.logToTerminal(`ℹ ${msg}`);
-                alert(msg);
+                this.logToTerminal(`⚠️ ${data.message}`);
+                if (blockedInfo) {
+                    this.logToTerminal(blockedInfo);
+                }
+
+                // Show better formatted alert
+                const alertMsg = data.blocked && data.blocked.length
+                    ? `No runnable features.\n\n${data.blocked.length} feature(s) are blocked by dependencies.\nComplete the required features first.`
+                    : data.message;
+                alert(alertMsg);
             }
         } catch (err) {
             console.error('Failed to execute next feature:', err);
             alert('Failed to start execution');
         } finally {
             btn.disabled = false;
-            btn.innerText = 'Execute Next';
+            this.updateExecuteButton();
         }
     },
 
-    async requestPause() {
-        if (!this.state.activeFeature) {
-            alert('No feature selected');
+    async stopExecution() {
+        const featureId = this.state.runningFeatureId || this.state.activeFeature;
+        if (!featureId) {
+            alert('No running feature to stop');
             return;
         }
 
         try {
-            await fetch(`/api/features/${this.state.activeFeature}/pause`, {
+            const res = await fetch(`/api/v2/features/${featureId}/pause`, {
                 method: 'POST'
             });
-            this.logToTerminal('Pause requested...');
+            const data = await res.json();
+            if (data.ok) {
+                this.state.stoppingFeatureId = featureId;
+                this.updateExecuteButton();
+            }
+            this.logToTerminal(data.message || 'Pause requested (will stop after current subtask)');
         } catch (err) {
             console.error('Failed to request pause:', err);
+            alert('Failed to stop execution');
+            this.state.stoppingFeatureId = null;
+            this.updateExecuteButton();
+        }
+    },
+
+    async retryFeature(featureId) {
+        if (!confirm('Retry this failed feature? This will clear all subtasks and restart from scratch.')) {
+            return;
+        }
+
+        try {
+            const res = await fetch(`/api/v2/features/${featureId}/retry`, {
+                method: 'POST'
+            });
+
+            const data = await res.json();
+
+            if (res.ok && data.ok) {
+                this.logToTerminal(`🔄 ${data.message}`);
+
+                // Refresh feature list
+                await this.loadFeatures(this.state.activeProject);
+
+                // If this was the active feature, reload subtasks
+                if (this.state.activeFeature === featureId) {
+                    await this.loadSubtasks(featureId);
+                }
+            } else {
+                throw new Error(data.error || 'Failed to retry feature');
+            }
+        } catch (err) {
+            console.error('Failed to retry feature:', err);
+            alert(`Failed to retry feature: ${err.message}`);
         }
     },
 
@@ -818,6 +1134,86 @@ const app = {
         term.scrollTop = term.scrollHeight;
     },
 
+    async fetchDevServerInfo() {
+        if (!this.state.activeProject) return;
+        try {
+            const res = await fetch(`/api/v2/projects/${this.state.activeProject}/dev-server`);
+            const data = await res.json();
+            if (data.running && data.info) {
+                this.state.devServer = data.info;
+                this.logToTerminal(`🟢 Dev server running at ${data.info.url}`);
+            } else {
+                this.state.devServer = null;
+            }
+        } catch (e) {
+            console.error('Failed to fetch dev server info', e);
+        }
+    },
+
+    async startDevServer() {
+        if (!this.state.activeProject) {
+            alert('Select a project first');
+            return;
+        }
+        try {
+            const res = await fetch(`/api/v2/projects/${this.state.activeProject}/dev-server/start`, { method: 'POST' });
+            const data = await res.json();
+            if (res.ok && data.ok) {
+                this.state.devServer = { port: data.port, url: data.url, type: data.type };
+                this.logToTerminal(`🟢 Dev server started at ${data.url}`);
+                try {
+                    window.open(data.url, '_blank');
+                } catch (e) {
+                    console.warn('Failed to open browser tab automatically', e);
+                }
+            } else {
+                throw new Error(data.error || 'Failed to start dev server');
+            }
+        } catch (e) {
+            console.error('Failed to start dev server', e);
+            alert(`Failed to start dev server: ${e.message}`);
+        }
+    },
+
+    async stopDevServer() {
+        if (!this.state.activeProject) return;
+        try {
+            const res = await fetch(`/api/v2/projects/${this.state.activeProject}/dev-server/stop`, { method: 'POST' });
+            if (res.ok) {
+                this.state.devServer = null;
+                this.logToTerminal('🛑 Dev server stopped');
+            } else {
+                const data = await res.json();
+                throw new Error(data.error || 'Failed to stop dev server');
+            }
+        } catch (e) {
+            console.error('Failed to stop dev server', e);
+            alert(`Failed to stop dev server: ${e.message}`);
+        }
+    },
+
+    updateExecuteButton() {
+        const btn = document.getElementById('btn-execute');
+        if (!btn) return;
+
+        if (this.state.runningFeatureId) {
+            if (this.state.stoppingFeatureId) {
+                btn.innerText = 'Stopping...';
+            } else {
+                btn.innerText = 'Stop after subtask';
+            }
+            btn.classList.remove('bg-green-600', 'hover:bg-green-500');
+            btn.classList.add('bg-red-700', 'hover:bg-red-600');
+            btn.disabled = false;
+        } else {
+            btn.innerText = 'Execute Next';
+            btn.classList.remove('bg-red-700', 'hover:bg-red-600');
+            btn.classList.add('bg-green-600', 'hover:bg-green-500');
+            this.state.stoppingFeatureId = null;
+            btn.disabled = false;
+        }
+    },
+
     switchTab(tab) {
         const term = document.getElementById('terminal-output');
         const files = document.getElementById('file-preview-area');
@@ -1001,6 +1397,9 @@ const app = {
                 if (data.type === 'feature-started') {
                     if (data.projectId === this.state.activeProject) {
                         this.logToTerminal(`▶ Feature started: ${data.feature?.name || data.featureId}`);
+                        this.state.runningFeatureId = data.featureId || null;
+                        this.state.stoppingFeatureId = null;
+                        this.updateExecuteButton();
                         this.loadFeatures(this.state.activeProject);
                     }
                 }
@@ -1044,6 +1443,9 @@ const app = {
                 if (data.type === 'feature-completed') {
                     if (data.projectId === this.state.activeProject) {
                         this.logToTerminal(`✓ Feature completed`);
+                        this.state.runningFeatureId = null;
+                        this.state.stoppingFeatureId = null;
+                        this.updateExecuteButton();
                         this.loadFeatures(this.state.activeProject);
                         if (data.featureId === this.state.activeFeature) {
                             this.loadSubtasks(data.featureId);
@@ -1053,13 +1455,36 @@ const app = {
                 if (data.type === 'feature-paused') {
                     if (data.projectId === this.state.activeProject) {
                         this.logToTerminal(`⏸ Feature paused`);
+                        this.state.runningFeatureId = null;
+                        this.state.stoppingFeatureId = null;
+                        this.updateExecuteButton();
                         this.loadFeatures(this.state.activeProject);
                     }
                 }
                 if (data.type === 'feature-failed') {
                     if (data.projectId === this.state.activeProject) {
                         this.logToTerminal(`✗ Feature failed`);
+                        this.state.runningFeatureId = null;
+                        this.state.stoppingFeatureId = null;
+                        this.updateExecuteButton();
                         this.loadFeatures(this.state.activeProject);
+                    }
+                }
+
+                if (data.type === 'feature-pause-requested') {
+                    if (data.featureId === this.state.runningFeatureId) {
+                        this.state.stoppingFeatureId = data.featureId;
+                        this.updateExecuteButton();
+                        this.logToTerminal('Pause requested (will stop after current subtask)');
+                    }
+                }
+
+                // Voting transparency
+                if (data.type === 'vote-summary') {
+                    // Only log if belongs to current project
+                    if (!this.state.activeProject || data.projectId === this.state.activeProject) {
+                        const top = (data.top || []).join(' | ');
+                        this.logToTerminal(`🗳️ Vote: samples=${data.samples}, unique=${data.unique}, k=${data.k}, winnerVotes=${data.winnerVotes}, marginMet=${data.marginMet ? 'yes' : 'no'}${top ? `, top=${top}` : ''}`);
                     }
                 }
 

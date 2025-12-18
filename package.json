@@ -1,0 +1,19 @@
+{
+  "name": "ultracode",
+  "version": "2.0.0",
+  "description": "MAKER-style autonomous coding agent with feature pipeline system",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "demo": "node src/index.js"
+  },
+  "keywords": ["ai", "coding", "agent", "automation"],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "puppeteer": "^22.0.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

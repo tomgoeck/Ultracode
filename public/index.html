@@ -24,6 +24,7 @@
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-dark.min.css">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <script src="/sortable.js"></script>
     <style>
         ::-webkit-scrollbar { width: 8px; height: 8px; }
         ::-webkit-scrollbar-track { background: #1f2937; }
@@ -72,6 +73,15 @@
             <div id="token-display" class="hidden text-xs text-gray-500 font-mono">
                 <span id="token-count">0</span> tokens
             </div>
+            <button onclick="app.startDevServer()" class="text-gray-400 hover:text-white transition-colors p-2 rounded-md hover:bg-gray-800" title="Start dev server">
+                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 3l14 9-14 9V3z"/></svg>
+            </button>
+            <button onclick="app.stopDevServer()" class="text-gray-400 hover:text-white transition-colors p-2 rounded-md hover:bg-gray-800" title="Stop dev server">
+                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 4h4v16H6zM14 4h4v16h-4z"/></svg>
+            </button>
+            <button onclick="app.showModelModal()" class="text-gray-400 hover:text-white transition-colors p-2 rounded-md hover:bg-gray-800" title="Set project models">
+                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 3l2.09 4.236L18.8 8.09l-3.4 3.31.802 4.65L12 14.77l-4.202 2.28.802-4.65-3.4-3.31 4.71-.854z"/></svg>
+            </button>
             <button onclick="app.toggleSettings()" class="text-gray-400 hover:text-white transition-colors p-2 rounded-md hover:bg-gray-800">
                 <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"></path><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path></svg>
             </button>
@@ -211,6 +221,38 @@ Ready...
             <div class="mt-6 flex justify-end gap-3">
                 <button onclick="app.toggleSettings()" class="px-4 py-2 rounded hover:bg-gray-800 text-sm">Cancel</button>
                 <button onclick="app.saveSettings()" class="px-4 py-2 bg-blue-600 hover:bg-blue-500 rounded text-white text-sm font-medium">Save Keys</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal: Project Models -->
+    <div id="modal-models" class="fixed inset-0 bg-black/80 hidden items-center justify-center z-50">
+        <div class="bg-gray-900 border border-gray-700 rounded-xl w-full max-w-xl p-6 shadow-2xl">
+            <div class="flex items-center justify-between mb-4">
+                <h3 class="text-xl font-bold">Project Models</h3>
+                <button onclick="app.hideModelModal()" class="text-gray-500 hover:text-white">
+                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg>
+                </button>
+            </div>
+            <p class="text-sm text-gray-500 mb-4">Set planner, executor, and vote models for this project. Changes apply to future planning/execution.</p>
+            <div class="space-y-4">
+                <div>
+                    <label class="block text-xs font-medium text-gray-400 mb-1">Planner Model</label>
+                    <select id="model-planner" class="w-full bg-gray-800 border border-gray-700 rounded p-2 text-sm focus:border-blue-500 outline-none"></select>
+                </div>
+                <div>
+                    <label class="block text-xs font-medium text-gray-400 mb-1">Executor Model</label>
+                    <select id="model-executor" class="w-full bg-gray-800 border border-gray-700 rounded p-2 text-sm focus:border-blue-500 outline-none"></select>
+                </div>
+                <div>
+                    <label class="block text-xs font-medium text-gray-400 mb-1">Vote Model</label>
+                    <select id="model-vote" class="w-full bg-gray-800 border border-gray-700 rounded p-2 text-sm focus:border-blue-500 outline-none"></select>
+                    <p class="text-xs text-gray-500 mt-1">Leave empty to use the executor model.</p>
+                </div>
+            </div>
+            <div class="mt-6 flex justify-end gap-3">
+                <button onclick="app.hideModelModal()" class="px-4 py-2 rounded hover:bg-gray-800 text-sm">Cancel</button>
+                <button onclick="app.saveModelSettings()" class="px-4 py-2 bg-blue-600 hover:bg-blue-500 rounded text-white text-sm font-medium">Save</button>
             </div>
         </div>
     </div>
