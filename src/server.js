@@ -28,6 +28,7 @@ const { FeatureManager } = require("./featureManager");
 const { planFeature } = require("./featurePlanner");
 const { ServerManager } = require("./serverManager");
 const { TestRunner } = require("./testRunner");
+const { getAllTemplates, getTemplate } = require("./templates");
 
 // Persistent config and in-memory state
 const configStore = new ConfigStore(path.join(process.cwd(), "data", "config.json"));
@@ -110,6 +111,7 @@ featureManager = new FeatureManager({
   serverManager,
   testRunner,
   configStore,
+  resourceMonitor,
 });
 
 const pendingCommands = new Map(pendingStore.list().map((c) => [c.id, c]));
@@ -541,11 +543,34 @@ async function handleApi(req, res) {
         return sendJson(res, 200, summary);
       }
 
+      if (url.pathname === "/api/metrics/project" && req.method === "GET") {
+        const projectId = url.searchParams.get("projectId");
+        if (!projectId) return sendJson(res, 400, { error: "projectId required" });
+        const metrics = resourceMonitor.getProjectMetrics(projectId);
+        return sendJson(res, 200, metrics || { models: [], totalTokens: 0, totalCost: 0, totalCostFormatted: "$0.00", totalTokensFormatted: "0k" });
+      }
+
       // ==================== WIZARD ENDPOINTS ====================
+
+      // Get available templates
+      if (url.pathname === "/api/templates" && req.method === "GET") {
+        const templates = getAllTemplates();
+        return sendJson(res, 200, { templates });
+      }
+
+      // Get specific template
+      if (url.pathname.match(/^\/api\/templates\/[^/]+$/) && req.method === "GET") {
+        const templateId = url.pathname.split("/")[3];
+        const template = getTemplate(templateId);
+        if (!template) {
+          return sendJson(res, 404, { error: "Template not found" });
+        }
+        return sendJson(res, 200, { template });
+      }
 
       // Start wizard (Page 1: Basics)
       if (url.pathname === "/api/wizard/start" && req.method === "POST") {
-        const { name, description, basePath } = body;
+        const { name, description, basePath, templateId } = body;
         if (!name) return sendJson(res, 400, { error: "name required" });
 
         const projectsBasePath = basePath || path.join(process.cwd(), "projects");
@@ -557,9 +582,18 @@ async function handleApi(req, res) {
           basePath: projectsBasePath,
         });
 
+        // If template selected, initialize wizard with template
+        if (templateId) {
+          const template = getTemplate(templateId);
+          if (template) {
+            wizardAgent.initializeFromTemplate(result.projectId, template);
+          }
+        }
+
         return sendJson(res, 200, {
           ok: true,
           ...result,
+          templateApplied: !!templateId,
         });
       }
 
@@ -811,7 +845,8 @@ async function handleApi(req, res) {
 
       // Update project models
       if (url.pathname.match(/^\/api\/v2\/projects\/[^/]+\/models$/) && req.method === "POST") {
-        const projectId = url.pathname.split("/").pop();
+        const parts = url.pathname.split("/");
+        const projectId = parts[4];
         const { plannerModel, executorModel, voteModel } = body;
         const project = featureStore.getProject(projectId);
         if (!project) return sendJson(res, 404, { error: "project not found" });
@@ -909,7 +944,8 @@ async function handleApi(req, res) {
           dod,
         });
 
-        return sendJson(res, 200, { ok: true, featureId });
+        const feature = featureStore.getFeature(featureId);
+        return sendJson(res, 200, { ok: true, featureId, feature });
       }
 
       // Update feature
@@ -935,6 +971,17 @@ async function handleApi(req, res) {
           technicalSummary,
           orderIndex,
         });
+
+        // If core fields changed, clear subtasks to force re-plan on next execution
+        const shouldReset = name !== undefined || description !== undefined || priority !== undefined || dependsOn !== undefined || dod !== undefined;
+        if (shouldReset) {
+          const subs = featureStore.getSubtasksByFeature(featureId);
+          for (const st of subs) {
+            featureStore.deleteSubtask(st.id);
+          }
+          // Reset feature status to pending so it can be replanned
+          featureStore.updateFeature(featureId, { status: "pending", technicalSummary: null });
+        }
 
         return sendJson(res, 200, { ok: true });
       }
@@ -964,6 +1011,18 @@ async function handleApi(req, res) {
 
         const subtasks = featureStore.getSubtasksByFeature(featureId);
         return sendJson(res, 200, { subtasks });
+      }
+
+      // Retry a failed subtask
+      if (url.pathname.match(/^\/api\/v2\/subtasks\/[^/]+\/retry$/) && req.method === "POST") {
+        const subtaskId = url.pathname.split("/")[4];
+
+        try {
+          const result = await featureManager.retrySubtask(subtaskId);
+          return sendJson(res, 200, { ok: true, ...result });
+        } catch (err) {
+          return sendJson(res, 400, { error: err.message });
+        }
       }
 
       // Get events for a project

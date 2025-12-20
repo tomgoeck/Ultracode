@@ -8,7 +8,7 @@ const { spawnSync } = require("child_process");
  * - Page 2: Project clarification via chat (features, stack, design)
  * - Page 3: Model selection
  *
- * Outputs: features.json + project.md in the project folder
+ * Outputs: project.md in the project folder and creates features directly in DB
  */
 class WizardAgent {
   /**
@@ -119,7 +119,7 @@ class WizardAgent {
    - **C = Could-Have**: Nice-to-have features that can be added later.
 4. For each feature, define a Definition of Done (DoD) that is measurable.
 5. Capture project guidelines (stack, design rules, structure, testing rules) in a human-readable form.
-6. When the user requests a summary/finalization, output exactly two artifacts: **project.md** and **features.json**.
+6. When the user requests a summary/finalization, output **project.md** and a JSON block of features (used to populate DB; no file written).
 7. Always respond in **Markdown** (use headings, bullet lists, tables or code fences where helpful).
 
 ## Scope Constraints
@@ -254,7 +254,7 @@ Feel free to answer all at once or we can go through them one by one. I can also
 
     // Generate response
     const prompt = messages.map((m) => `${m.role}: ${m.content}`).join("\n\n");
-    const response = await provider.generate(prompt, { temperature: 0.7, maxTokens: 2000 });
+    const response = await provider.generate(prompt, { temperature: 0.7, maxTokens: 16000 });
 
     // Add assistant response to conversation
     wizard.conversation.push({ role: "assistant", content: response });
@@ -426,14 +426,17 @@ Feel free to answer all at once or we can go through them one by one. I can also
       .map((m) => `${m.role}: ${m.content}`)
       .join("\n\n");
 
-    const prompt = `Based on this conversation about a project, generate the final project.md and features.json files.
+    const prompt = `Based on this ENTIRE conversation about a project, extract ALL features that were discussed and generate project.md and a features JSON block.
 
 ${conversationText}
 
+IMPORTANT: Extract ALL features mentioned in the conversation above. Do not provide just one example feature!
+
 When building features.json:
 - Start with a foundation feature that sets up the working skeleton: repo structure, baseline layout/navigation, shared styling/theme tokens, and any build/config needed so other features can run.
-- Follow with end-to-end capabilities in dependency/flow order (MVP first), not just "nice to have" ideas. Optional features should never appear before the core scaffolding and main user journey.
+- Follow with ALL other features discussed in the conversation in dependency/flow order (MVP first). Include hero sections, about sections, contact forms, project showcases, etc. - everything mentioned.
 - Keep features coarse but outcome-focused (subtasks will add detail). Each feature must include a clear, measurable Definition of Done.
+- If the conversation mentions 6 features, output 6 features. If it mentions 10, output 10. Extract everything discussed.
 
 Output exactly the following two blocks with no extra commentary:
 
@@ -502,12 +505,31 @@ src/
         }
       ],
       "technical_summary": ""
+    },
+    {
+      "id": "F002",
+      "name": "[Second Feature Name]",
+      "description": "[Description of second feature]",
+      "priority": "A",
+      "status": "draft",
+      "depends_on": ["F001"],
+      "definition_of_done": [
+        {
+          "id": "D002",
+          "type": "automated",
+          "description": "[Check description]",
+          "status": "pending",
+          "evidence": null
+        }
+      ],
+      "technical_summary": ""
     }
+    // ... include ALL other features discussed in the conversation
   ]
 }
 ===END_FEATURES_JSON===`;
 
-    const response = await provider.generate(prompt, { temperature: 0.3, maxTokens: 4000 });
+    const response = await provider.generate(prompt, { temperature: 0.3, maxTokens: 16000 });
 
     // Extract project.md block
     const projectMdMatch = response.match(/===PROJECT_MD===\s*([\s\S]*?)\s*===END_PROJECT_MD===/);
@@ -586,6 +608,41 @@ src/
     }
   }
 
+  /**
+   * Initialize wizard with template data.
+   * @param {string} projectId
+   * @param {Object} template - Template object with projectMd and features
+   */
+  initializeFromTemplate(projectId, template) {
+    const wizard = this.activeWizards.get(projectId) || {
+      conversation: [],
+      webSearches: [],
+      projectSummary: null,
+      extractedFeatures: [],
+    };
+
+    // Set template content
+    wizard.projectMd = template.projectMd;
+    wizard.featuresJson = { features: template.features };
+    wizard.extractedFeatures = template.features.map(f => ({
+      id: f.id,
+      name: f.name,
+      description: f.description,
+      priority: f.priority,
+      dependsOn: f.depends_on || [],
+      dod: f.definition_of_done || [],
+    }));
+
+    wizard.conversation.push({
+      role: "system",
+      content: `Template "${template.name}" selected. You can still chat to customize the project.`,
+    });
+
+    this.activeWizards.set(projectId, wizard);
+
+    return wizard;
+  }
+
   // ==================== PAGE 3: MODEL SELECTION & FINALIZE ====================
 
   /**
@@ -646,14 +703,20 @@ src/
     }
 
     // Use extracted content if available, otherwise generate fallback
-    const featuresJsonContent = wizard.featuresJson || this.generateFeaturesJson(wizard.extractedFeatures);
-    const featuresPath = path.join(folderPath, "features.json");
-    fs.writeFileSync(featuresPath, JSON.stringify(featuresJsonContent, null, 2));
-
     // Use extracted project.md if available, otherwise generate fallback
     const projectMdContent = wizard.projectMd || this.generateProjectMd(project.name, wizard.projectSummary);
     const projectMdPath = path.join(folderPath, "project.md");
     fs.writeFileSync(projectMdPath, projectMdContent);
+
+    // Generate init.sh script for project initialization
+    const { createInitScript } = require('./initScriptGenerator');
+    try {
+      const initScriptPath = createInitScript(folderPath);
+      console.log(`[WizardAgent] Created init.sh at ${initScriptPath}`);
+    } catch (err) {
+      console.warn(`[WizardAgent] Failed to create init.sh:`, err.message);
+      // Non-fatal - continue without init.sh
+    }
 
     // If still no features, fail fast
     if (!wizard.extractedFeatures || wizard.extractedFeatures.length === 0) {
@@ -672,8 +735,11 @@ src/
         dodString = `${f.name} is fully implemented and working`;
       }
 
+      // Make feature ID globally unique by prefixing with project ID
+      const featureId = `${projectId}-${f.id || f.featureId || `F${String(i + 1).padStart(3, '0')}`}`;
+
       this.featureStore.createFeature({
-        id: f.id || f.featureId,
+        id: featureId,
         projectId,
         name: f.name,
         description: f.description,
@@ -698,7 +764,6 @@ src/
     return {
       projectId,
       folderPath,
-      featuresPath,
       projectMdPath,
       featuresCount: wizard.extractedFeatures.length,
       models: { plannerModel, executorModel, voteModel },

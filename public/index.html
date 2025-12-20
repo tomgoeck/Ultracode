@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Ultracode - MAKER Agent</title>
-    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="/vendor/tailwind.js"></script>
     <script>
         tailwind.config = {
             darkMode: 'class',
@@ -21,9 +21,9 @@
             }
         }
     </script>
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-dark.min.css">
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <link rel="stylesheet" href="/vendor/highlight-atom-one-dark.min.css">
+    <script src="/vendor/highlight.min.js"></script>
+    <script src="/vendor/marked.min.js"></script>
     <script src="/sortable.js"></script>
     <style>
         ::-webkit-scrollbar { width: 8px; height: 8px; }
@@ -64,14 +64,25 @@
 
     <!-- Top Navigation -->
     <header class="bg-gray-900 border-b border-gray-800 h-14 flex items-center justify-between px-6 shrink-0">
-        <div class="flex items-center gap-3 cursor-pointer" onclick="app.showProjects()">
-            <div class="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center font-bold text-white">U</div>
-            <h1 class="font-bold text-lg tracking-tight">Ultracode <span class="text-xs text-gray-500 font-normal ml-2">MAKER Edition</span></h1>
+        <div class="flex items-center gap-3">
+            <div class="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center font-bold text-white cursor-pointer" onclick="app.showProjects()">U</div>
+            <div class="flex items-center gap-2">
+                <h1 class="font-bold text-lg tracking-tight cursor-pointer hover:text-blue-400 transition-colors" onclick="app.showProjects()">Ultracode</h1>
+                <span id="project-title-separator" class="text-gray-600 hidden">/</span>
+                <div id="project-title-container" class="hidden flex items-center gap-2">
+                    <h2 id="project-title" class="font-semibold text-base text-gray-300"></h2>
+                    <button id="project-md-link" onclick="app.openProjectMd()" class="text-xs text-blue-400 hover:text-blue-300 transition-colors flex items-center gap-1" title="Open project.md">
+                        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
+                        <span>project.md</span>
+                    </button>
+                </div>
+            </div>
         </div>
         <div class="flex items-center gap-4">
-            <!-- Token Display -->
-            <div id="token-display" class="hidden text-xs text-gray-500 font-mono">
-                <span id="token-count">0</span> tokens
+            <!-- Resource Monitor -->
+            <div id="resource-monitor" class="hidden text-xs font-mono text-right">
+                <div id="resource-details" class="space-y-0.5"></div>
+                <div id="resource-total" class="text-gray-500 border-t border-gray-800 pt-0.5 mt-0.5"></div>
             </div>
             <button onclick="app.startDevServer()" class="text-gray-400 hover:text-white transition-colors p-2 rounded-md hover:bg-gray-800" title="Start dev server">
                 <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 3l14 9-14 9V3z"/></svg>
@@ -109,10 +120,10 @@
         </div>
 
         <!-- View: Project Dashboard (3-Column Layout) -->
-        <div id="view-dashboard" class="h-full flex hidden">
+        <div id="view-dashboard" class="h-full flex hidden overflow-hidden">
 
             <!-- Left: Feature Pipeline -->
-            <div class="w-72 border-r border-gray-800 bg-gray-950 flex flex-col">
+            <div id="col-features" class="w-72 min-w-[200px] border-r border-gray-800 bg-gray-950 flex flex-col">
                 <div class="p-3 border-b border-gray-800 flex items-center justify-between">
                     <div class="flex items-center gap-2">
                         <button onclick="app.openProjectMd()" class="text-xs text-gray-500 hover:text-blue-400 transition-colors" title="Edit project.md">
@@ -142,7 +153,9 @@
             </div>
 
             <!-- Middle: Subtasks & Chat -->
-            <div class="w-96 border-r border-gray-800 flex flex-col bg-gray-900/50">
+            <div id="drag-features" class="w-1 h-full cursor-col-resize bg-gray-800/50"></div>
+
+            <div id="col-subtasks" class="w-96 min-w-[240px] border-r border-gray-800 flex flex-col bg-gray-900/50">
                 <div class="p-3 border-b border-gray-800 flex justify-between items-center bg-gray-900">
                     <div>
                         <h3 id="dash-feature-name" class="font-bold truncate text-sm">Select a Feature</h3>
@@ -167,7 +180,9 @@
             </div>
 
             <!-- Right: Terminal / File Viewer -->
-            <div class="flex-1 flex flex-col bg-gray-950">
+            <div id="drag-subtasks" class="w-1 h-full cursor-col-resize bg-gray-800/50"></div>
+
+            <div id="col-terminal" class="flex-1 flex flex-col bg-gray-950">
                 <div class="h-10 border-b border-gray-800 flex items-center justify-between px-4 bg-gray-900">
                     <div class="flex items-center gap-4 text-xs font-mono">
                         <button id="btn-tab-term" onclick="app.switchTab('term')" class="text-blue-400 border-b-2 border-blue-400 h-10 px-2 font-bold">Terminal</button>
@@ -195,6 +210,32 @@ Ready...
             </div>
         </div>
     </main>
+
+    <!-- Modal: Edit Feature -->
+    <div id="modal-edit-feature" class="fixed inset-0 bg-black/80 hidden items-center justify-center z-50">
+        <div class="bg-gray-900 border border-gray-700 rounded-xl w-full max-w-lg p-6 shadow-2xl">
+            <div class="flex items-center justify-between mb-4">
+                <h3 class="text-xl font-bold">Edit Feature</h3>
+                <button onclick="app.hideEditFeatureModal()" class="text-gray-500 hover:text-white">
+                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg>
+                </button>
+            </div>
+            <div class="space-y-4">
+                <div>
+                    <label class="block text-xs font-medium text-gray-400 mb-1">Name</label>
+                    <input id="edit-feature-name" type="text" class="w-full bg-gray-800 border border-gray-700 rounded p-2 text-sm focus:border-blue-500 outline-none">
+                </div>
+                <div>
+                    <label class="block text-xs font-medium text-gray-400 mb-1">Description</label>
+                    <textarea id="edit-feature-desc" rows="3" class="w-full bg-gray-800 border border-gray-700 rounded p-2 text-sm focus:border-blue-500 outline-none"></textarea>
+                </div>
+            </div>
+            <div class="mt-6 flex justify-end gap-3">
+                <button onclick="app.hideEditFeatureModal()" class="px-4 py-2 rounded hover:bg-gray-800 text-sm">Cancel</button>
+                <button onclick="app.saveFeatureEdits()" class="px-4 py-2 bg-blue-600 hover:bg-blue-500 rounded text-white text-sm font-medium">Save</button>
+            </div>
+        </div>
+    </div>
 
     <!-- Modal: Settings -->
     <div id="modal-settings" class="fixed inset-0 bg-black/80 hidden items-center justify-center z-50">
@@ -291,6 +332,19 @@ Ready...
                         <textarea id="wizard-description" rows="3" placeholder="Describe your project in a few sentences..."
                             class="w-full bg-gray-800 border border-gray-700 rounded p-3 text-sm focus:border-blue-500 outline-none"></textarea>
                     </div>
+                    <div>
+                        <label class="block text-xs font-medium text-gray-400 mb-2">Start from Template (Optional)</label>
+                        <div id="template-list" class="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                            <div class="template-card border-2 border-blue-500 bg-gray-800 p-3 rounded-lg cursor-pointer hover:border-blue-400 transition-colors" data-template-id="">
+                                <div class="flex items-center gap-2 mb-1">
+                                    <span class="text-lg">📄</span>
+                                    <span class="font-medium text-sm">Start from Scratch</span>
+                                </div>
+                                <p class="text-xs text-gray-500">Use AI chat to define your project</p>
+                            </div>
+                            <!-- Templates will be loaded here -->
+                        </div>
+                    </div>
                 </div>
                 <div class="mt-6 flex justify-end">
                     <button onclick="app.wizardNext(1)" class="px-6 py-2 bg-blue-600 hover:bg-blue-500 rounded text-white text-sm font-medium">
@@ -354,7 +408,7 @@ Ready...
                         <div id="wizard-artifacts" class="flex items-center gap-3 mt-2 sm:mt-0 text-xs text-green-300">
                             <span class="hidden">Artifacts ready:</span>
                             <a id="link-project-md" class="hidden hover:text-green-200 underline cursor-pointer" onclick="app.wizardOpenFile('project.md')">project.md</a>
-                            <a id="link-features-json" class="hidden hover:text-green-200 underline cursor-pointer" onclick="app.wizardOpenFile('features.json')">features.json</a>
+                            <!-- features.json removed -->
                         </div>
                     </div>
                 </div>

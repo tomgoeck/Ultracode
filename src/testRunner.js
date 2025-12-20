@@ -15,14 +15,26 @@ class TestRunner {
    * Initialize Puppeteer browser
    */
   async init() {
-    if (!this.browser) {
-      console.log('[TestRunner] Launching Puppeteer browser...');
-      this.browser = await puppeteer.launch({
-        headless: true,
-        args: ['--no-sandbox', '--disable-setuid-sandbox']
-      });
-      console.log('[TestRunner] Browser ready');
+    // Check if browser exists and is still connected
+    if (this.browser) {
+      try {
+        // Try to get browser version to check if connected
+        await this.browser.version();
+        return; // Browser is still good
+      } catch (err) {
+        // Browser is disconnected, set to null to create new one
+        console.log('[TestRunner] Browser disconnected, relaunching...');
+        this.browser = null;
+      }
     }
+
+    // Launch new browser
+    console.log('[TestRunner] Launching Puppeteer browser...');
+    this.browser = await puppeteer.launch({
+      headless: true,
+      args: ['--no-sandbox', '--disable-setuid-sandbox']
+    });
+    console.log('[TestRunner] Browser ready');
   }
 
   /**
@@ -102,7 +114,7 @@ class TestRunner {
       });
 
       // Wait a bit for any animations/JS to settle
-      await page.waitForTimeout(1000);
+      await new Promise(resolve => setTimeout(resolve, 1000));
 
       // Take screenshot
       await page.screenshot({

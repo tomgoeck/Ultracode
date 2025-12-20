@@ -8,6 +8,121 @@ function unwrapCodeFence(text) {
   return m ? m[1] : text;
 }
 
+/**
+ * Simplified patch application (single file, no line numbers). Uses context + removed lines
+ * to find and replace a unique block. Throws if the context is not found or no change results.
+ * @param {import('./projectGuard').ProjectGuard} guard
+ * @param {string} relPath
+ * @param {string} patch
+ */
+async function applySimplePatch(guard, relPath, patch) {
+  const headers = Array.from(patch.matchAll(/^[+-]{3}\s+(?:a\/|b\/)?(.+)$/gm)).map((m) => m[1]);
+  if (headers.length && !headers.every((p) => p.endsWith(relPath))) {
+    throw new Error("Patch references unexpected paths");
+  }
+
+  const content = await guard.readFile(relPath);
+  const lines = patch.split("\n");
+  const hunks = [];
+  let idx = 0;
+
+  while (idx < lines.length) {
+    const line = lines[idx];
+    if (line.startsWith("@@")) {
+      const hunk = [];
+      idx++;
+      while (idx < lines.length && !lines[idx].startsWith("@@")) {
+        const l = lines[idx];
+        if (l.startsWith("+") || l.startsWith("-") || l.startsWith(" ")) {
+          hunk.push(l);
+        } else if (l.startsWith("---") || l.startsWith("+++")) {
+          // skip extra headers
+        }
+        idx++;
+      }
+      if (hunk.length) hunks.push(hunk);
+      continue;
+    }
+    idx++;
+  }
+
+  if (!hunks.length) {
+    throw new Error("No hunks found in patch");
+  }
+
+  let updated = content;
+  for (const hunk of hunks) {
+    const findLines = [];
+    const replaceLines = [];
+    for (const hLine of hunk) {
+      const body = hLine.slice(1);
+      if (hLine.startsWith(" ")) {
+        findLines.push(body);
+        replaceLines.push(body);
+      } else if (hLine.startsWith("-")) {
+        findLines.push(body);
+      } else if (hLine.startsWith("+")) {
+        replaceLines.push(body);
+      }
+    }
+    const findText = findLines.join("\n");
+    const replaceText = replaceLines.join("\n");
+
+    // If no context provided, treat as full rewrite
+    if (!findText.length) {
+      if (!replaceText.length) {
+        throw new Error("Simple patch has no findText or replaceText");
+      }
+      updated = replaceText;
+      continue;
+    }
+
+    const pos = updated.indexOf(findText);
+    if (pos === -1) {
+      // As a last resort, if small context and replacement exists, rewrite entire file
+      if (findLines.length <= 2 && replaceText.length) {
+        updated = replaceText;
+        continue;
+      }
+      throw new Error("Simple patch failed: context not found in file");
+    }
+    updated = updated.slice(0, pos) + replaceText + updated.slice(pos + findText.length);
+  }
+
+  if (updated === content) {
+    throw new Error("Simple patch produced no changes");
+  }
+
+  return guard.writeFile(relPath, updated, { dryRun: false });
+}
+
+/**
+ * Last-resort: reconstruct file content from patch body by keeping context/added lines,
+ * dropping removed lines. Useful when git apply rejects malformed hunks.
+ * @param {import('./projectGuard').ProjectGuard} guard
+ * @param {string} relPath
+ * @param {string} patch
+ */
+async function applyPatchAsNewFile(guard, relPath, patch) {
+  const lines = patch.split("\n");
+  const body = [];
+  for (const line of lines) {
+    if (line.startsWith("---") || line.startsWith("+++")) continue;
+    if (line.startsWith("@@")) continue;
+    if (line.startsWith("+")) {
+      body.push(line.slice(1));
+    } else if (line.startsWith(" ")) {
+      body.push(line.slice(1));
+    } else if (line.startsWith("-")) {
+      continue;
+    }
+  }
+  if (!body.length) {
+    throw new Error("Could not reconstruct file from patch");
+  }
+  return guard.writeFile(relPath, body.join("\n"), { dryRun: false });
+}
+
 // Coordinates single-step execution using MAD: stateless prompt → candidates → red-flag filter → voting → apply.
 class Orchestrator {
   /**
@@ -96,24 +211,23 @@ IMPORTANT:
 
 You are editing: ${step.apply.path}
 
-Output a JSON object with this exact structure:
+Preferred format: return a unified diff patch wrapped in JSON.
+
 {
-  "old_string": "exact text to find (including 3+ lines of context)",
-  "new_string": "replacement text"
+  "patch": "--- a/${step.apply.path}\\n+++ b/${step.apply.path}\\n@@ ... @@\\n-old line\\n+new line\\n"
 }
 
-CRITICAL RULES:
-- Include at least 3 lines of context BEFORE and AFTER the target text
-- Match whitespace, indentation, and newlines EXACTLY as they appear in the file
-- Never escape the strings - use literal text matching
-- The old_string must uniquely identify the single location to edit
-- If multiple occurrences might exist, include enough context to be unique
+Rules for patch:
+- Use unified diff format with correct path header.
+- Include enough context to be unique and safe.
+- Do NOT replace the whole file; change only the needed lines.
 
-Example:
+If you cannot produce a patch, fall back to a minimal JSON replace:
 {
-  "old_string": "function calculate(x) {\\n  return x * 2;\\n}",
-  "new_string": "function calculate(x, multiplier = 2) {\\n  return x * multiplier;\\n}"
+  "old_string": "exact text to find (3+ lines context)",
+  "new_string": "replacement"
 }
+But patch is strongly preferred because it is safer and reviewable.
 `.trim();
     } else {
       outputInstruction = "Return the complete output for this step. Keep it focused and minimal.";
@@ -126,6 +240,8 @@ Example:
       `Task: ${task.title}`,
       `Goal: ${task.goal}`,
       `Step Intent: ${step.intent}`,
+      `Planner Model: ${task.planningModel || task.model || "unknown"}`,
+      `Executor/Vote Model: ${step.voteModel || task.voteModel || task.model || "unknown"}`,
       ``,
       `# Available State`,
       stateSlice || "(empty)",
@@ -261,6 +377,15 @@ Example:
     let applyResult;
     try {
       applyResult = await this.applyWinner(step, winner.output, projectGuardOverride);
+      // Basic sanity: ensure something changed when we wrote/edited
+      if (
+        applyResult &&
+        applyResult.before !== undefined &&
+        applyResult.after !== undefined &&
+        applyResult.before === applyResult.after
+      ) {
+        throw new Error("Apply produced no changes (before and after identical)");
+      }
     } catch (err) {
       step.status = "failed";
       this.snapshotStore?.recordStepEnd(step.id, "failed", err.message);
@@ -378,6 +503,71 @@ Example:
       const next = `${prev}${cleanedOutput}`;
       return guard.writeFile(step.apply.path, next, { dryRun: step.apply.dryRun });
     }
+    if (step.apply.type === "editFile") {
+      if (!guard) throw new Error("ProjectGuard not configured");
+      let instructions = null;
+      try {
+        instructions = JSON.parse(unwrapCodeFence(output));
+      } catch (err) {
+        throw new Error(`Failed to parse edit instructions JSON: ${err.message}`);
+      }
+      // Patch is preferred; fall back to search/replace.
+      if (instructions.patch) {
+        const patch = instructions.patch;
+        if (typeof patch !== "string" || !patch.includes("---") || !patch.includes("+++") || !patch.includes("@@")) {
+          // Try a best-effort reconstruction even if patch headers look odd
+          try {
+            return await applyPatchAsNewFile(guard, step.apply.path, patch);
+          } catch (err) {
+            throw new Error("Invalid patch format for editFile");
+          }
+        }
+        try {
+          const result = await guard.applyPatch(step.apply.path, patch);
+          return result;
+        } catch (err) {
+          // Fallback: try a simplified patch apply (context-based replace) before failing
+          const simplified = await applySimplePatch(guard, step.apply.path, patch).catch(() => null);
+          if (simplified) return simplified;
+          const rebuilt = await applyPatchAsNewFile(guard, step.apply.path, patch).catch(() => null);
+          if (rebuilt) return rebuilt;
+          throw err;
+        }
+      }
+
+      const { old_string: oldStr, new_string: newStr } = instructions || {};
+      if (!oldStr || newStr === undefined) {
+        throw new Error("Edit instructions must include either patch or old_string/new_string");
+      }
+      const before = await guard.readFile(step.apply.path).catch(() => {
+        throw new Error(`File not found: ${step.apply.path}`);
+      });
+      const occurrences = oldStr.length ? before.split(oldStr).length - 1 : 0;
+      if (occurrences === 0) {
+        throw new Error("old_string not found in file; edit aborted to avoid corrupting file");
+      }
+      if (occurrences > 1) {
+        throw new Error("old_string is not unique in file; include more context to make it unique");
+      }
+      const after = before.replace(oldStr, newStr);
+      if (after === before) {
+        throw new Error("Edit produced no changes; check old_string/new_string");
+      }
+      const result = await guard.writeFile(step.apply.path, after, { dryRun: step.apply.dryRun });
+
+      // Post-verify: ensure new_string is present and old_string is gone
+      if (!step.apply.dryRun) {
+        const finalContent = await guard.readFile(step.apply.path);
+        if (finalContent.includes(oldStr)) {
+          throw new Error("Edit applied but old_string still present in file");
+        }
+        if (!finalContent.includes(newStr)) {
+          throw new Error("Edit applied but new_string not found in file");
+        }
+      }
+
+      return result;
+    }
     if (step.apply.type === "statePatch") {
       const key = step.apply.stateKey || "outputs";
       this.stateStore.updateSection(key, (prev = []) => [...prev, output]);
@@ -408,6 +598,14 @@ Example:
   emitEvent(event) {
     if (this.eventEmitter && typeof this.eventEmitter.emit === "function") {
       this.eventEmitter.emit(event);
+      // Also emit a user-facing terminal log for file writes/edits
+      if (event.type === "step-completed" && event.applyResult?.path) {
+        const model = event.voteModel || event.task?.voteModel || event.task?.model;
+        this.eventEmitter.emit({
+          type: "terminal-log",
+          message: `[write] ${event.applyResult.type || "apply"} -> ${event.applyResult.path}${model ? ` (model=${model})` : ""}`
+        });
+      }
     }
   }
 }

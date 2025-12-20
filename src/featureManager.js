@@ -18,7 +18,7 @@ class FeatureManager {
    * @param {import('./serverManager').ServerManager} opts.serverManager
    * @param {import('./testRunner').TestRunner} opts.testRunner
    */
-  constructor({ featureStore, orchestrator, llmRegistry, planFeature, broadcast, gitCommitter, serverManager, testRunner, configStore }) {
+  constructor({ featureStore, orchestrator, llmRegistry, planFeature, broadcast, gitCommitter, serverManager, testRunner, configStore, resourceMonitor }) {
     this.featureStore = featureStore;
     this.orchestrator = orchestrator;
     this.llmRegistry = llmRegistry;
@@ -28,6 +28,7 @@ class FeatureManager {
     this.serverManager = serverManager;
     this.testRunner = testRunner;
     this.configStore = configStore;
+    this.resourceMonitor = resourceMonitor;
 
     // Initialize ContextBuilder for intelligent context aggregation
     this.contextBuilder = new ContextBuilder(featureStore);
@@ -218,25 +219,38 @@ class FeatureManager {
       // Step 1: Plan the feature into subtasks if needed
       let subtasks = this.featureStore.getSubtasksByFeature(featureId);
       if (subtasks.length === 0) {
-        this.broadcast({ type: "feature-planning", projectId: project.id, featureId });
+        this.broadcast({
+          type: "feature-planning",
+          projectId: project.id,
+          featureId,
+          plannerModel,
+          intent: `Plan feature "${feature.name}"`,
+        });
 
         // Load context
         const context = await this._loadFeatureContext(project, feature);
-
-        // Plan the feature
-        const plannerModel = project.planner_model;
-        if (!plannerModel) {
-          throw new Error("No planner model configured for project");
-        }
 
         const plannedSubtasks = await this.planFeature({
           feature,
           project,
           context,
+          projectPath: project.folder_path,
           llmRegistry: this.llmRegistry,
           plannerModel,
           fallbackModels: [executorModel, voteModel],
           configStore: this.configStore,
+          onProgress: (message) => {
+            // Bubble up planner activity to UI/terminal
+            this.broadcast({
+              type: "planner-progress",
+              projectId: project.id,
+              featureId,
+              message,
+            });
+            this.featureStore.recordEvent(project.id, featureId, null, "planner_progress", {
+              message,
+            });
+          },
         });
 
         // Create subtasks in database
@@ -250,7 +264,13 @@ class FeatureManager {
         }
 
         subtasks = this.featureStore.getSubtasksByFeature(featureId);
-        this.broadcast({ type: "feature-planned", projectId: project.id, featureId, subtaskCount: subtasks.length });
+        this.broadcast({
+          type: "feature-planned",
+          projectId: project.id,
+          featureId,
+          subtaskCount: subtasks.length,
+          plannerModel,
+        });
       }
 
       // Step 2: Execute subtasks sequentially
@@ -308,6 +328,12 @@ class FeatureManager {
           // Run through orchestrator
           const stepResult = await this.orchestrator.runStep(task, task.steps[0], workspaceGuard);
 
+          // Treat non-applied or errored results as failures
+          if (!stepResult || stepResult.applied === false || stepResult.error) {
+            const errMsg = stepResult?.error || "Subtask did not apply any changes";
+            throw new Error(errMsg);
+          }
+
           // Update subtask with result
           this.featureStore.updateSubtask(subtask.id, {
             status: "completed",
@@ -347,9 +373,9 @@ class FeatureManager {
         });
 
         // Git commit
-        if (this.gitCommitter) {
+        if (this.gitCommitter && typeof this.gitCommitter.commitFeatureCompletion === "function") {
           const commitResult = await this.gitCommitter.commitFeatureCompletion(feature, project, results);
-          if (commitResult.committed) {
+          if (commitResult?.committed) {
             this.featureStore.recordEvent(project.id, featureId, null, "git_commit", {
               message: commitResult.message,
               changedFiles: commitResult.changedFiles,
@@ -398,15 +424,6 @@ class FeatureManager {
       includeSimilarFeatures: true,
     });
 
-    // Also load features.json for backward compatibility
-    const featuresJsonPath = path.join(project.folder_path, "features.json");
-    let featuresJson = null;
-    try {
-      featuresJson = JSON.parse(fs.readFileSync(featuresJsonPath, "utf8"));
-    } catch {
-      // features.json not found or invalid
-    }
-
     // Return both rich context and legacy format
     return {
       // Rich context from ContextBuilder
@@ -414,7 +431,6 @@ class FeatureManager {
 
       // Legacy format (for backward compatibility with existing planFeature calls)
       projectMd: richContext.guidelines || "",
-      featuresJson,
       completedFeatures: richContext.completedFeatures || [],
 
       // Additional context fields
@@ -605,6 +621,124 @@ async executeNextRunnable(projectId) {
    */
   isRunning(featureId) {
     return this.runningFeatures.has(featureId);
+  }
+
+  /**
+   * Retry a single failed subtask.
+   * @param {string} subtaskId
+   * @returns {Promise<Object>}
+   */
+  async retrySubtask(subtaskId) {
+    const subtask = this.featureStore.getSubtask(subtaskId);
+    if (!subtask) {
+      throw new Error(`Subtask not found: ${subtaskId}`);
+    }
+
+    const feature = this.featureStore.getFeature(subtask.feature_id);
+    if (!feature) {
+      throw new Error(`Feature not found for subtask: ${subtask.feature_id}`);
+    }
+
+    const project = this.featureStore.getProject(feature.project_id);
+    if (!project) {
+      throw new Error(`Project not found: ${feature.project_id}`);
+    }
+
+    // Check if feature is running
+    if (this.runningFeatures.has(feature.id)) {
+      throw new Error(`Cannot retry subtask while feature is running`);
+    }
+
+    // Reset subtask to pending
+    this.featureStore.updateSubtask(subtaskId, {
+      status: "pending",
+      error: null,
+      result: null,
+    });
+
+    this.broadcast({
+      type: "subtask-retry-started",
+      projectId: project.id,
+      featureId: feature.id,
+      subtaskId,
+    });
+
+    // Execute just this subtask
+    try {
+      const executorModel = this._ensureProvider(project.executor_model);
+      const voteModel = this._ensureProvider(project.vote_model || project.executor_model);
+
+      const workspaceGuard = new (require("./projectGuard").ProjectGuard)(project.folder_path);
+
+      // Build task object for orchestrator
+      const execModelKey = typeof executorModel === "string" ? executorModel : project.executor_model;
+      const voteModelKey = typeof voteModel === "string" ? voteModel : (project.vote_model || project.executor_model);
+
+      const task = {
+        taskId: `retry-${subtaskId}`,
+        projectId: project.id,
+        execModel: execModelKey,
+        voteModel: voteModelKey,
+        k: 2,
+        nSamples: 3,
+        projectId: project.id,
+        featureId: feature.id,
+        steps: [
+          {
+            id: subtask.id,
+            intent: subtask.intent,
+            stateRefs: ["workspace"],
+            apply: {
+              type: subtask.apply_type || "writeFile",
+              path: subtask.apply_path,
+            },
+          },
+        ],
+      };
+
+      // Run through orchestrator
+      const stepResult = await this.orchestrator.runStep(task, task.steps[0], workspaceGuard);
+
+      // Update subtask with result
+      this.featureStore.updateSubtask(subtaskId, {
+        status: "completed",
+        result: stepResult,
+      });
+
+      this.featureStore.recordEvent(project.id, feature.id, subtaskId, "subtask_retried_success", {
+        hasWinner: !!stepResult.winner,
+      });
+
+      this.broadcast({
+        type: "subtask-retry-completed",
+        projectId: project.id,
+        featureId: feature.id,
+        subtaskId,
+        result: stepResult,
+      });
+
+      return { subtaskId, success: true, result: stepResult };
+    } catch (error) {
+      // Retry failed
+      this.featureStore.updateSubtask(subtaskId, {
+        status: "failed",
+        error: error.message,
+      });
+
+      this.featureStore.recordEvent(project.id, feature.id, subtaskId, "subtask_retry_failed", {
+        error: error.message,
+      });
+
+      this.broadcast({
+        type: "subtask-retry-failed",
+        projectId: project.id,
+        featureId: feature.id,
+        subtaskId,
+        error: error.message,
+      });
+
+      throw error;
+    }
   }
 
   /**

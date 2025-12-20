@@ -39,6 +39,7 @@ class ResourceMonitor {
     };
 
     this.taskMetrics = new Map(); // taskId -> metrics
+    this.projectMetrics = new Map(); // projectId -> { models: { modelName: { tokens, cost } } }
   }
 
   /**
@@ -188,6 +189,81 @@ class ResourceMonitor {
    */
   clearAll() {
     this.taskMetrics.clear();
+    this.projectMetrics.clear();
+  }
+
+  /**
+   * Record prompt call for a project (aggregates by model)
+   * @param {string} projectId
+   * @param {string} model
+   * @param {string} prompt
+   * @param {string} output
+   */
+  recordProjectPrompt(projectId, model, prompt, output) {
+    const inputTokens = this.estimateTokens(prompt);
+    const outputTokens = this.estimateTokens(output);
+    const totalTokens = inputTokens + outputTokens;
+
+    const pricing = this.tokenPricing[model] || { input: 0, output: 0 };
+    const cost = ((inputTokens * pricing.input) + (outputTokens * pricing.output)) / 1000;
+
+    if (!this.projectMetrics.has(projectId)) {
+      this.projectMetrics.set(projectId, {
+        projectId,
+        models: {},
+        totalTokens: 0,
+        totalCost: 0,
+        lastUpdated: Date.now(),
+      });
+    }
+
+    const projectData = this.projectMetrics.get(projectId);
+
+    if (!projectData.models[model]) {
+      projectData.models[model] = {
+        inputTokens: 0,
+        outputTokens: 0,
+        totalTokens: 0,
+        cost: 0,
+        calls: 0,
+      };
+    }
+
+    const modelData = projectData.models[model];
+    modelData.inputTokens += inputTokens;
+    modelData.outputTokens += outputTokens;
+    modelData.totalTokens += totalTokens;
+    modelData.cost += cost;
+    modelData.calls += 1;
+
+    projectData.totalTokens += totalTokens;
+    projectData.totalCost += cost;
+    projectData.lastUpdated = Date.now();
+  }
+
+  /**
+   * Get metrics for a specific project
+   * @param {string} projectId
+   * @returns {Object|null}
+   */
+  getProjectMetrics(projectId) {
+    const metrics = this.projectMetrics.get(projectId);
+    if (!metrics) return null;
+
+    return {
+      projectId: metrics.projectId,
+      models: Object.entries(metrics.models).map(([name, data]) => ({
+        name,
+        ...data,
+        costFormatted: `$${data.cost.toFixed(4)}`,
+        tokensFormatted: `${(data.totalTokens / 1000).toFixed(1)}k`,
+      })),
+      totalTokens: metrics.totalTokens,
+      totalCost: metrics.totalCost,
+      totalCostFormatted: `$${metrics.totalCost.toFixed(4)}`,
+      totalTokensFormatted: `${(metrics.totalTokens / 1000).toFixed(1)}k`,
+      lastUpdated: metrics.lastUpdated,
+    };
   }
 }
 

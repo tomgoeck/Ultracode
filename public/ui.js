@@ -6,6 +6,7 @@ const app = {
         runningFeatureId: null,
         stoppingFeatureId: null,
         devServer: null,
+        editingFeatureId: null,
         sse: null,
         wizard: {
             currentPage: 1,
@@ -70,6 +71,7 @@ const app = {
     init() {
         this.fetchProjects();
         this.connectSSE();
+        this.initResizers();
     },
 
     async fetchProjects() {
@@ -480,6 +482,7 @@ const app = {
         document.getElementById('view-dashboard').classList.add('hidden');
         document.getElementById('view-dashboard').classList.remove('flex');
         this.state.activeProject = null;
+        this.hideProjectTitle();
     },
 
     async renderSidebar() {
@@ -516,11 +519,38 @@ const app = {
         dash.classList.remove('hidden');
         dash.classList.add('flex');
 
+        // Update project title in header
+        this.updateProjectTitle(projectId);
+
         this.logToTerminal(`Opening project: ${projectId}`);
 
         // Load features for this project
         await this.loadFeatures(projectId);
         await this.fetchDevServerInfo();
+    },
+
+    updateProjectTitle(projectId) {
+        // Find project in state
+        const project = this.state.projects?.find(p => p.id === projectId);
+
+        if (project) {
+            // Show project title elements
+            document.getElementById('project-title-separator').classList.remove('hidden');
+            document.getElementById('project-title-container').classList.remove('hidden');
+            document.getElementById('project-title-container').classList.add('flex');
+
+            // Set project name
+            document.getElementById('project-title').textContent = project.name;
+        } else {
+            // Hide project title if not found
+            this.hideProjectTitle();
+        }
+    },
+
+    hideProjectTitle() {
+        document.getElementById('project-title-separator').classList.add('hidden');
+        document.getElementById('project-title-container').classList.add('hidden');
+        document.getElementById('project-title-container').classList.remove('flex');
     },
 
     confirmDeleteProject(projectId, projectName) {
@@ -607,6 +637,9 @@ const app = {
                     </div>
                 `;
             }
+
+            // Load resource metrics for project
+            await this.loadResourceMetrics(projectId);
         } catch (err) {
             console.error('Failed to load features:', err);
             document.getElementById('feature-list').innerHTML = `
@@ -614,6 +647,32 @@ const app = {
                     Error loading features
                 </div>
             `;
+        }
+    },
+
+    async loadResourceMetrics(projectId) {
+        try {
+            const res = await fetch(`/api/metrics/project?projectId=${projectId}`);
+            const data = await res.json();
+
+            const monitor = document.getElementById('resource-monitor');
+            const details = document.getElementById('resource-details');
+            const total = document.getElementById('resource-total');
+
+            monitor.classList.remove('hidden');
+
+            if (data.models && data.models.length > 0) {
+                details.innerHTML = data.models.map(m =>
+                    `<div class="text-gray-400">${m.name}: <span class="text-gray-300">${m.tokensFormatted}</span> <span class="text-gray-500">(${m.costFormatted})</span></div>`
+                ).join('');
+                total.innerHTML = `Total: <span class="text-white">${data.totalCostFormatted}</span>`;
+            } else {
+                details.innerHTML = `<div class="text-gray-500">No token data yet</div>`;
+                total.innerHTML = ``;
+            }
+        } catch (err) {
+            console.error('Failed to load resource metrics:', err);
+            // Silently fail - metrics are non-critical
         }
     },
 
@@ -658,6 +717,23 @@ const app = {
             </button>
         ` : '';
 
+        const editButtons = `
+            <div class="flex items-center gap-2 mt-2">
+                <button
+                    onclick="event.stopPropagation(); app.showEditFeatureModal('${feature.id}');"
+                    class="text-[10px] px-2 py-1 bg-gray-800 hover:bg-gray-700 rounded text-gray-200"
+                    title="Edit feature">
+                    ✏️ Edit
+                </button>
+                <button
+                    onclick="event.stopPropagation(); app.deleteFeature('${feature.id}');"
+                    class="text-[10px] px-2 py-1 bg-red-800 hover:bg-red-700 rounded text-white"
+                    title="Delete feature">
+                    🗑 Delete
+                </button>
+            </div>
+        `;
+
         return `
             <div onclick="app.selectFeature('${feature.id}')"
                 class="feature-item p-3 rounded-lg border ${activeClass} ${priorityColor} cursor-pointer transition-all"
@@ -674,6 +750,7 @@ const app = {
                 <h4 class="font-medium text-sm text-gray-200 mb-1">${this.escapeHtml(feature.name)}</h4>
                 <p class="text-xs text-gray-500 line-clamp-2">${this.escapeHtml(feature.description || '')}</p>
                 ${this.renderDependencyInfo(feature)}
+                ${editButtons}
                 ${retryButton}
             </div>
         `;
@@ -686,7 +763,12 @@ const app = {
 
         const allFeatures = this.state.features || {};
         const deps = feature.depends_on.map(depId => {
-            const depFeature = allFeatures[depId];
+            // Try to find feature by exact ID first, then by short ID
+            let depFeature = allFeatures[depId];
+            if (!depFeature) {
+                // If not found, try to find by short ID (e.g., "F001" -> "project-xxx-F001")
+                depFeature = Object.values(allFeatures).find(f => f.id && f.id.endsWith(`-${depId}`));
+            }
             if (!depFeature) {
                 return `<span class="text-red-400">${depId} (not found)</span>`;
             }
@@ -700,7 +782,10 @@ const app = {
 
         // Check if feature is blocked (pending with incomplete dependencies)
         const isBlocked = feature.status === 'pending' && feature.depends_on.some(depId => {
-            const dep = allFeatures[depId];
+            let dep = allFeatures[depId];
+            if (!dep) {
+                dep = Object.values(allFeatures).find(f => f.id && f.id.endsWith(`-${depId}`));
+            }
             return !dep || (dep.status !== 'completed' && dep.status !== 'verified');
         });
 
@@ -776,16 +861,33 @@ const app = {
                     const icon = statusIcons[st.status] || '☐';
                     const color = statusColors[st.status] || 'text-gray-500';
 
+                    const retryButton = st.status === 'failed' ? `
+                        <button
+                            onclick="app.retrySubtask('${st.id}')"
+                            class="ml-2 px-2 py-0.5 text-[10px] bg-blue-600 hover:bg-blue-500 text-white rounded transition-colors"
+                            title="Retry this subtask">
+                            Retry
+                        </button>
+                    ` : '';
+
+                    const errorDisplay = st.status === 'failed' && st.error ? `
+                        <div class="text-[10px] text-red-400 mt-1 break-all">❌ ${this.escapeHtml(st.error)}</div>
+                    ` : '';
+
                     return `
                         <div class="p-2 rounded bg-gray-800 border border-gray-700">
                             <div class="flex items-start gap-2">
                                 <span class="${color} text-sm">${icon}</span>
                                 <div class="flex-1">
-                                    <div class="text-xs ${color === 'text-gray-500' ? 'text-gray-300' : color}">${this.escapeHtml(st.intent)}</div>
+                                    <div class="flex items-center justify-between">
+                                        <div class="text-xs ${color === 'text-gray-500' ? 'text-gray-300' : color}">${this.escapeHtml(st.intent)}</div>
+                                        ${retryButton}
+                                    </div>
                                     ${st.apply_path ? `<div class="text-[10px] text-gray-600 mt-1">${st.apply_type}: ${st.apply_path}</div>` : ''}
                                     ${st.status === 'completed' && st.completed_at ? `
                                         <div class="text-[10px] text-gray-600 mt-1">✓ ${new Date(st.completed_at).toLocaleTimeString()}</div>
                                     ` : ''}
+                                    ${errorDisplay}
                                 </div>
                             </div>
                         </div>
@@ -806,6 +908,35 @@ const app = {
                     Error loading subtasks
                 </div>
             `;
+        }
+    },
+
+    async retrySubtask(subtaskId) {
+        if (!confirm('Retry this subtask?')) return;
+
+        try {
+            this.logToTerminal(`⟳ Retrying subtask...`);
+
+            const res = await fetch(`/api/v2/subtasks/${subtaskId}/retry`, {
+                method: 'POST',
+            });
+
+            const data = await res.json();
+
+            if (data.ok) {
+                this.logToTerminal(`✓ Subtask retry completed successfully`);
+                // Reload subtasks to show updated status
+                if (this.state.selectedFeatureId) {
+                    await this.selectFeature(this.state.selectedFeatureId);
+                }
+            } else {
+                this.logToTerminal(`❌ Retry failed: ${data.error}`);
+                alert(`Retry failed: ${data.error}`);
+            }
+        } catch (err) {
+            console.error('Retry error:', err);
+            this.logToTerminal(`❌ Retry error: ${err.message}`);
+            alert(`Retry error: ${err.message}`);
         }
     },
 
@@ -844,7 +975,10 @@ const app = {
                 const blockedInfo = data.blocked && data.blocked.length
                     ? `\n\n📋 Blocked features:\n${data.blocked.map(b => {
                         const depNames = (b.dependsOn || []).map(depId => {
-                            const dep = allFeatures[depId];
+                            let dep = allFeatures[depId];
+                            if (!dep) {
+                                dep = Object.values(allFeatures).find(f => f.id && f.id.endsWith(`-${depId}`));
+                            }
                             return dep ? dep.name : depId;
                         });
                         return `  • ${b.name} (waiting for: ${depNames.join(', ') || 'unknown'})`;
@@ -959,7 +1093,7 @@ const app = {
         if (!this.state.activeProject) return;
 
         try {
-            const res = await fetch(`/api/features?projectId=${this.state.activeProject}`);
+            const res = await fetch(`/api/v2/features?projectId=${this.state.activeProject}`);
             const data = await res.json();
 
             const select = document.getElementById('add-feature-depends');
@@ -990,7 +1124,7 @@ const app = {
         }
 
         try {
-            const res = await fetch('/api/features', {
+            const res = await fetch('/api/v2/features', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -1015,6 +1149,82 @@ const app = {
         } catch (err) {
             console.error('Failed to add feature:', err);
             alert('Failed to add feature');
+        }
+    },
+
+    async showEditFeatureModal(featureId) {
+        this.state.editingFeatureId = featureId;
+        try {
+            const res = await fetch(`/api/v2/features/${featureId}`);
+            const data = await res.json();
+            if (!data.feature) throw new Error('Feature not found');
+            document.getElementById('edit-feature-name').value = data.feature.name || '';
+            document.getElementById('edit-feature-desc').value = data.feature.description || '';
+            const modal = document.getElementById('modal-edit-feature');
+            modal.classList.remove('hidden');
+            modal.style.display = 'flex';
+        } catch (e) {
+            console.error('Failed to load feature', e);
+            alert('Failed to load feature');
+        }
+    },
+
+    hideEditFeatureModal() {
+        this.state.editingFeatureId = null;
+        const modal = document.getElementById('modal-edit-feature');
+        modal.classList.add('hidden');
+        modal.style.display = 'none';
+    },
+
+    async saveFeatureEdits() {
+        const featureId = this.state.editingFeatureId;
+        if (!featureId) return;
+        const name = document.getElementById('edit-feature-name').value.trim();
+        const description = document.getElementById('edit-feature-desc').value.trim();
+        if (!name) {
+            alert('Name required');
+            return;
+        }
+        try {
+            const res = await fetch(`/api/v2/features/${featureId}`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ name, description })
+            });
+            const data = await res.json();
+            if (res.ok && data.ok !== false) {
+                this.hideEditFeatureModal();
+                await this.loadFeatures(this.state.activeProject);
+                this.logToTerminal('✓ Feature updated');
+            } else {
+                throw new Error(data.error || 'Failed to update feature');
+            }
+        } catch (e) {
+            console.error('Failed to update feature', e);
+            alert(`Failed to update feature: ${e.message}`);
+        }
+    },
+
+    async deleteFeature(featureId) {
+        if (!confirm('Delete this feature? This cannot be undone.')) return;
+        try {
+            const res = await fetch(`/api/v2/features/${featureId}`, { method: 'DELETE' });
+            const data = await res.json();
+            if (res.ok && data.ok !== false) {
+                await this.loadFeatures(this.state.activeProject);
+                if (this.state.activeFeature === featureId) {
+                    this.state.activeFeature = null;
+                    document.getElementById('subtask-list').innerHTML = `
+                        <div class="text-gray-500 italic text-center py-8">Select a feature to view subtasks</div>
+                    `;
+                }
+                this.logToTerminal('🗑 Feature deleted');
+            } else {
+                throw new Error(data.error || 'Failed to delete feature');
+            }
+        } catch (e) {
+            console.error('Delete failed', e);
+            alert(`Failed to delete feature: ${e.message}`);
         }
     },
 
@@ -1132,6 +1342,49 @@ const app = {
         const term = document.getElementById('terminal-output');
         term.innerText += `\n[${new Date().toLocaleTimeString()}] ${text}`;
         term.scrollTop = term.scrollHeight;
+    },
+
+    initResizers() {
+        const dash = document.getElementById('view-dashboard');
+        const colFeatures = document.getElementById('col-features');
+        const colSubtasks = document.getElementById('col-subtasks');
+        const colTerminal = document.getElementById('col-terminal');
+        const dragFeatures = document.getElementById('drag-features');
+        const dragSubtasks = document.getElementById('drag-subtasks');
+
+        if (!dash || !colFeatures || !colSubtasks || !colTerminal || !dragFeatures || !dragSubtasks) return;
+
+        let startX = 0;
+        let startWidth = 0;
+        let target = null;
+
+        const onMouseMove = (e) => {
+            if (!target) return;
+            const dx = e.clientX - startX;
+            const newWidth = Math.max((startWidth + dx), target.minWidth || 200);
+            target.col.style.width = `${newWidth}px`;
+        };
+
+        const onMouseUp = () => {
+            target = null;
+            document.removeEventListener('mousemove', onMouseMove);
+            document.removeEventListener('mouseup', onMouseUp);
+        };
+
+        const startDrag = (col) => (e) => {
+            e.preventDefault();
+            target = col;
+            startX = e.clientX;
+            startWidth = col.col.getBoundingClientRect().width;
+            document.addEventListener('mousemove', onMouseMove);
+            document.addEventListener('mouseup', onMouseUp);
+        };
+
+        colFeatures.minWidth = 200;
+        colSubtasks.minWidth = 240;
+
+        dragFeatures.addEventListener('mousedown', startDrag({ col: colFeatures, minWidth: 200 }));
+        dragSubtasks.addEventListener('mousedown', startDrag({ col: colSubtasks, minWidth: 240 }));
     },
 
     async fetchDevServerInfo() {
@@ -1396,7 +1649,8 @@ const app = {
                 // Feature events
                 if (data.type === 'feature-started') {
                     if (data.projectId === this.state.activeProject) {
-                        this.logToTerminal(`▶ Feature started: ${data.feature?.name || data.featureId}`);
+                        const modelInfo = data.model ? ` (model=${data.model})` : '';
+                        this.logToTerminal(`▶ Feature started: ${data.feature?.name || data.featureId}${modelInfo}`);
                         this.state.runningFeatureId = data.featureId || null;
                         this.state.stoppingFeatureId = null;
                         this.updateExecuteButton();
@@ -1405,12 +1659,19 @@ const app = {
                 }
                 if (data.type === 'feature-planning') {
                     if (data.projectId === this.state.activeProject) {
-                        this.logToTerminal(`📋 Planning feature...`);
+                        const modelInfo = data.plannerModel ? ` (planner=${data.plannerModel})` : '';
+                        this.logToTerminal(`📋 Planning feature...${modelInfo}`);
+                    }
+                }
+                if (data.type === 'planner-progress') {
+                    if (data.projectId === this.state.activeProject) {
+                        this.logToTerminal(`🧭 Planner: ${data.message || ''}`);
                     }
                 }
                 if (data.type === 'feature-planned') {
                     if (data.projectId === this.state.activeProject) {
-                        this.logToTerminal(`✓ Feature planned: ${data.subtaskCount} subtasks`);
+                        const modelInfo = data.plannerModel ? ` (planner=${data.plannerModel})` : '';
+                        this.logToTerminal(`✓ Feature planned: ${data.subtaskCount} subtasks${modelInfo}`);
                         if (data.featureId === this.state.activeFeature) {
                             this.loadSubtasks(data.featureId);
                         }
@@ -1484,7 +1745,10 @@ const app = {
                     // Only log if belongs to current project
                     if (!this.state.activeProject || data.projectId === this.state.activeProject) {
                         const top = (data.top || []).join(' | ');
-                        this.logToTerminal(`🗳️ Vote: samples=${data.samples}, unique=${data.unique}, k=${data.k}, winnerVotes=${data.winnerVotes}, marginMet=${data.marginMet ? 'yes' : 'no'}${top ? `, top=${top}` : ''}`);
+                        const model = data.voteModel || 'unknown-model';
+                        const temps = data.temps && data.temps.length ? `temps=[${data.temps.join(',')}]` : '';
+                        const preview = data.winnerPreview ? `preview="${data.winnerPreview.replace(/\s+/g, ' ').slice(0, 80)}..."` : '';
+                        this.logToTerminal(`🗳️ Vote: model=${model}, samples=${data.samples}, unique=${data.unique}, k=${data.k}, winnerVotes=${data.winnerVotes}, marginMet=${data.marginMet ? 'yes' : 'no'}${temps ? `, ${temps}` : ''}${top ? `, top=${top}` : ''}${preview ? `, ${preview}` : ''}`);
                     }
                 }
 
@@ -1507,7 +1771,9 @@ const app = {
                     } else {
                         detail = 'completed.';
                     }
-                    this.logToTerminal(`[step ${data.stepId}] ${detail}`);
+                    const applyInfo = data.applyResult?.path ? ` file=${data.applyResult.path}` : '';
+                    const modelInfo = data.voteModel ? ` model=${data.voteModel}` : '';
+                    this.logToTerminal(`[step ${data.stepId}] ${detail}${applyInfo}${modelInfo}`);
                 }
                 if (data.type === 'step-error') {
                     this.logToTerminal(`[step ${data.stepId}] ERROR: ${data.error || 'unknown error'}`);
@@ -1550,7 +1816,8 @@ const app = {
             projectFolderName: null,
             projectFolderPath: null,
             summary: null,
-            sessionId: 'wizard-' + Date.now()
+            sessionId: 'wizard-' + Date.now(),
+            selectedTemplateId: null
         };
 
         // Show modal
@@ -1577,8 +1844,62 @@ const app = {
         // Show page 1
         this.wizardShowPage(1);
 
-        // Load available models for page 3
+        // Load templates and models
+        this.wizardLoadTemplates();
         this.wizardLoadModels();
+    },
+
+    async wizardLoadTemplates() {
+        try {
+            const res = await fetch('/api/templates');
+            const data = await res.json();
+
+            if (data.templates && data.templates.length > 0) {
+                const templateList = document.getElementById('template-list');
+
+                // Add click handler to "Start from Scratch" card
+                const scratchCard = templateList.querySelector('[data-template-id=""]');
+                if (scratchCard) {
+                    scratchCard.onclick = () => this.selectTemplate(null);
+                }
+
+                // Generate template cards
+                data.templates.forEach(template => {
+                    const card = document.createElement('div');
+                    card.className = 'template-card border-2 border-gray-700 bg-gray-800 p-3 rounded-lg cursor-pointer hover:border-blue-400 transition-colors';
+                    card.dataset.templateId = template.id;
+                    card.innerHTML = `
+                        <div class="flex items-center gap-2 mb-1">
+                            <span class="text-lg">${template.icon}</span>
+                            <span class="font-medium text-sm">${this.escapeHtml(template.name)}</span>
+                        </div>
+                        <p class="text-xs text-gray-500">${this.escapeHtml(template.description)}</p>
+                    `;
+                    card.onclick = () => this.selectTemplate(template.id);
+                    templateList.appendChild(card);
+                });
+            }
+        } catch (err) {
+            console.error('Failed to load templates:', err);
+        }
+    },
+
+    selectTemplate(templateId) {
+        // Update state (null or empty string = no template)
+        this.state.wizard.selectedTemplateId = templateId || null;
+
+        // Update UI - remove selection from all cards
+        const normalizedId = templateId || '';
+        document.querySelectorAll('.template-card').forEach(card => {
+            const cardId = card.dataset.templateId || '';
+            if (cardId === normalizedId) {
+                card.classList.remove('border-gray-700');
+                card.classList.add('border-blue-500');
+            } else {
+                card.classList.remove('border-blue-500');
+                card.classList.add('border-gray-700');
+            }
+        });
     },
 
     cancelWizard() {
@@ -1589,7 +1910,7 @@ const app = {
 
     wizardShowPage(pageNum) {
         if (pageNum === 3 && !this.state.wizard.summary) {
-            alert('Please generate the summary (project.md + features.json) before continuing.');
+            alert('Please generate the summary (project.md) before continuing.');
             return;
         }
         this.state.wizard.currentPage = pageNum;
@@ -1638,10 +1959,20 @@ const app = {
 
             // Initialize server-side wizard (creates project folder/db entry)
             try {
+                const payload = {
+                    name,
+                    description: desc
+                };
+
+                // Add template ID if one is selected
+                if (this.state.wizard.selectedTemplateId) {
+                    payload.templateId = this.state.wizard.selectedTemplateId;
+                }
+
                 const res = await fetch('/api/wizard/start', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ name, description: desc })
+                    body: JSON.stringify(payload)
                 });
                 const data = await res.json();
                 if (!res.ok || !data.ok) {
@@ -1652,13 +1983,21 @@ const app = {
                 this.state.wizard.projectFolderName = data.folderName;
                 this.state.wizard.projectFolderPath = data.folderPath;
                 this.state.wizard.sessionId = data.projectId; // align IDs for all endpoints
+
+                // If template was applied, mark as having summary and skip chat
+                if (data.templateApplied) {
+                    this.state.wizard.summary = { projectMd: 'Template applied', featuresJson: {} };
+                    this.logToTerminal(`✓ Template "${this.state.wizard.selectedTemplateId}" applied`);
+                    this.wizardShowPage(3);
+                    return;
+                }
             } catch (err) {
                 console.error('Wizard start failed', err);
                 alert('Failed to start wizard. Please check logs.');
                 return;
             }
 
-            // Initialize chat with first LLM turn using name/description
+            // Initialize chat with first LLM turn using name/description (only if no template)
             this.wizardShowPage(2);
             await this.wizardInitChat();
 
@@ -1963,16 +2302,13 @@ const app = {
         if (!container) return;
         const span = container.querySelector('span');
         const md = document.getElementById('link-project-md');
-        const feat = document.getElementById('link-features-json');
-        if (!span || !md || !feat) return;
+        if (!span || !md) return;
         if (show) {
             span.classList.remove('hidden');
             md.classList.remove('hidden');
-            feat.classList.remove('hidden');
         } else {
             span.classList.add('hidden');
             md.classList.add('hidden');
-            feat.classList.add('hidden');
         }
     },
 
@@ -2131,16 +2467,13 @@ const app = {
         if (!container) return;
         const span = container.querySelector('span');
         const md = document.getElementById('link-project-md');
-        const feat = document.getElementById('link-features-json');
-        if (!span || !md || !feat) return;
+        if (!span || !md) return;
         if (show) {
             span.classList.remove('hidden');
             md.classList.remove('hidden');
-            feat.classList.remove('hidden');
         } else {
             span.classList.add('hidden');
             md.classList.add('hidden');
-            feat.classList.add('hidden');
         }
     },
 
@@ -2148,10 +2481,6 @@ const app = {
         // Simple preview using the summary cache
         if (file === 'project.md' && this.state.wizard.projectMd) {
             alert(this.state.wizard.projectMd);
-            return;
-        }
-        if (file === 'features.json' && this.state.wizard.featuresJson) {
-            alert(JSON.stringify(this.state.wizard.featuresJson, null, 2));
             return;
         }
         const folder = this.state.wizard.projectFolderPath || this.state.wizard.projectFolderName || this.state.wizard.projectId || 'projects/<name>';

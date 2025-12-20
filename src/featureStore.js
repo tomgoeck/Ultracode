@@ -332,8 +332,8 @@ class FeatureStore {
   isFeatureRunnable(featureId) {
     const feature = this.getFeature(featureId);
     if (!feature) return false;
-    if (feature.status !== "pending") return false;
-
+    // Allow pending or paused if deps are met
+    if (feature.status !== "pending" && feature.status !== "paused") return false;
     return this.areDependenciesMet(featureId);
   }
 
@@ -349,9 +349,23 @@ class FeatureStore {
     const dependsOn = feature.depends_on || [];
     if (dependsOn.length === 0) return true;
 
-    // Check all dependencies are completed or verified
+    const projectId = feature.project_id;
+
+    const resolveDep = (depId) => {
+      // Try exact match
+      let dep = this.getFeature(depId);
+      if (dep) return dep;
+      // Try with project prefix
+      const prefixed = `${projectId}-${depId}`;
+      dep = this.getFeature(prefixed);
+      if (dep) return dep;
+      // Try suffix match (ids ending with depId)
+      const all = this.getFeaturesByProject(projectId);
+      return all.find((f) => f.id.endsWith(depId));
+    };
+
     for (const depId of dependsOn) {
-      const dep = this.getFeature(depId);
+      const dep = resolveDep(depId);
       if (!dep || (dep.status !== "completed" && dep.status !== "verified")) {
         return false;
       }
@@ -367,7 +381,7 @@ class FeatureStore {
   getNextRunnableFeature(projectId) {
     const features = this.getFeaturesByProject(projectId);
     for (const feature of features) {
-      if (feature.status === "pending" && this.isFeatureRunnable(feature.id)) {
+      if ((feature.status === "pending" || feature.status === "paused") && this.isFeatureRunnable(feature.id)) {
         return feature;
       }
     }
@@ -415,32 +429,6 @@ class FeatureStore {
   reorderFeatures(projectId, ordering) {
     for (const { id, orderIndex } of ordering) {
       this.run(`UPDATE features SET order_index = ${orderIndex} WHERE id = ${this.q(id)} AND project_id = ${this.q(projectId)};`);
-    }
-
-    // Also persist ordering into features.json if present
-    const project = this.getProject(projectId);
-    if (project?.folder_path) {
-      const featuresPath = path.join(project.folder_path, "features.json");
-      if (fs.existsSync(featuresPath)) {
-        try {
-          const json = JSON.parse(fs.readFileSync(featuresPath, "utf8"));
-          if (Array.isArray(json.features)) {
-            const orderMap = new Map(ordering.map((o) => [o.id, o.orderIndex]));
-            json.features.sort((a, b) => {
-              const ai = orderMap.has(a.id) ? orderMap.get(a.id) : a.order_index || 0;
-              const bi = orderMap.has(b.id) ? orderMap.get(b.id) : b.order_index || 0;
-              return ai - bi;
-            });
-            json.features = json.features.map((f) => ({
-              ...f,
-              order_index: orderMap.has(f.id) ? orderMap.get(f.id) : f.order_index || 0,
-            }));
-            fs.writeFileSync(featuresPath, JSON.stringify(json, null, 2));
-          }
-        } catch (e) {
-          console.error("[FeatureStore] Failed to update features.json ordering:", e.message);
-        }
-      }
     }
   }
 

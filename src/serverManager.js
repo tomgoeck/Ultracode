@@ -24,6 +24,9 @@ class ServerManager {
       return { port: existing.port, url: existing.url };
     }
 
+    // Check and run init.sh if it exists and hasn't been run yet
+    await this._runInitScriptIfNeeded(projectPath, projectId);
+
     const serverType = this._detectServerType(projectPath);
     // Start on a high, likely-free port (fallback to random if unavailable)
     const port = await this._findAvailablePort(42000);
@@ -137,6 +140,51 @@ class ServerManager {
     }
 
     return 'static'; // Default fallback
+  }
+
+  /**
+   * Run init.sh script if it exists and hasn't been run yet
+   * Creates a .init-done marker file after successful execution
+   */
+  async _runInitScriptIfNeeded(projectPath, projectId) {
+    const initScriptPath = path.join(projectPath, 'init.sh');
+    const initDoneMarker = path.join(projectPath, '.init-done');
+
+    // Check if init.sh exists
+    if (!fs.existsSync(initScriptPath)) {
+      return; // No init script, nothing to do
+    }
+
+    // Check if already initialized
+    if (fs.existsSync(initDoneMarker)) {
+      console.log(`[ServerManager] Project ${projectId} already initialized`);
+      return;
+    }
+
+    console.log(`[ServerManager] Running initialization script for ${projectId}...`);
+
+    try {
+      // Make init.sh executable
+      fs.chmodSync(initScriptPath, '755');
+
+      // Execute init.sh
+      const { execSync } = require('child_process');
+      const output = execSync('bash init.sh', {
+        cwd: projectPath,
+        stdio: 'pipe',
+        timeout: 300000 // 5 minute timeout
+      });
+
+      console.log(`[ServerManager] Initialization output:\n${output.toString()}`);
+
+      // Create marker file to indicate successful initialization
+      fs.writeFileSync(initDoneMarker, new Date().toISOString());
+      console.log(`[ServerManager] Initialization completed successfully for ${projectId}`);
+
+    } catch (err) {
+      console.error(`[ServerManager] Initialization failed for ${projectId}:`, err.message);
+      throw new Error(`Project initialization failed: ${err.message}`);
+    }
   }
 
   /**
