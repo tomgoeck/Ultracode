@@ -15,7 +15,19 @@ class RedFlagger {
    * @returns {string[]} redFlags
    */
   evaluate(output, rules = []) {
-    const combinedRules = [{ maxChars: DEFAULT_MAX_CHARS }, this.defaultRule, ...rules];
+    const hasMaxChars = rules.some((rule) => rule && typeof rule.maxChars === "number");
+    const hasMaxTokens = rules.some((rule) => rule && typeof rule.maxTokens === "number");
+    const defaultRule = this.defaultRule && typeof this.defaultRule === "object"
+      ? { ...this.defaultRule }
+      : null;
+    if (defaultRule && hasMaxChars) delete defaultRule.maxChars;
+    if (defaultRule && hasMaxTokens) delete defaultRule.maxTokens;
+
+    const combinedRules = [
+      ...(hasMaxChars || hasMaxTokens ? [] : [{ maxChars: DEFAULT_MAX_CHARS }]),
+      defaultRule,
+      ...rules,
+    ].filter(Boolean);
     const redFlags = [];
 
     for (const rule of combinedRules) {

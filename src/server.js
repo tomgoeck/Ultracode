@@ -29,6 +29,7 @@ const { planFeature } = require("./featurePlanner");
 const { ServerManager } = require("./serverManager");
 const { TestRunner } = require("./testRunner");
 const { getAllTemplates, getTemplate } = require("./templates");
+const { normalizeLLMResponse } = require("./llmUtils");
 
 // Persistent config and in-memory state
 const configStore = new ConfigStore(path.join(process.cwd(), "data", "config.json"));
@@ -49,12 +50,12 @@ const commandRunner = new CommandRunner({
   denylist: configStore.getSetting("denylist", []),
 });
 
-// Initialize MAKER components (paraphraser for error decorrelation, resource monitor for cost tracking)
-const resourceMonitor = new ResourceMonitor();
-const paraphraser = new PromptParaphraser(llms, "gpt-4o-mini"); // Use cheap model for paraphrasing
 const gitCommitter = new GitCommitter(process.cwd()); // Auto-commit task completions
 const snapshotStore = new SnapshotStore(path.join(process.cwd(), "data", "snapshots.db"));
 const featureStore = new FeatureStore(path.join(process.cwd(), "data", "features.db"));
+// Initialize MAKER components (paraphraser for error decorrelation, resource monitor for cost tracking)
+const resourceMonitor = new ResourceMonitor({ featureStore });
+const paraphraser = new PromptParaphraser(llms, "gpt-4o-mini", resourceMonitor); // Use cheap model for paraphrasing
 // Clear any stale "running" features from abrupt shutdowns
 featureStore.resetRunningFeatures("failed");
 
@@ -67,6 +68,7 @@ const wizardAgent = new WizardAgent({
   featureStore,
   llmRegistry: llms,
   tavilyProvider,
+  resourceMonitor,
 });
 
 // Initialize ServerManager and TestRunner for automated testing
@@ -212,6 +214,126 @@ function removePendingCommand(id) {
   stateStore.updateSection("pendingCommands", (prev = []) => prev.filter((c) => c.id !== id));
 }
 
+function normalizeModelKey(name) {
+  if (!name || typeof name !== "string") return name;
+  const parts = name.split(":");
+  if (parts.length <= 1) return name;
+  return parts.slice(1).join(":");
+}
+
+function canonicalizeModelName(name) {
+  if (!name || typeof name !== "string") return name;
+  let normalized = normalizeModelKey(name);
+  normalized = normalized.replace(/-\d{4}-\d{2}-\d{2}$/, "");
+  normalized = normalized.replace(/-\d{4}$/, "");
+  return normalized;
+}
+
+function formatTokensCount(count) {
+  const safe = Number.isFinite(count) ? count : 0;
+  return `${safe.toLocaleString()} tokens`;
+}
+
+function buildRoleMetrics(project, metrics, roleUsage = []) {
+  if (!project) return [];
+  const modelStats = new Map((metrics?.models || []).map((m) => [m.name, m]));
+  const canonicalStats = new Map();
+  for (const entry of metrics?.models || []) {
+    const key = canonicalizeModelName(entry.name);
+    if (!key) continue;
+    const existing = canonicalStats.get(key) || {
+      inputTokens: 0,
+      outputTokens: 0,
+      totalTokens: 0,
+      calls: 0,
+      cost: 0,
+      costFormatted: "$0.0000",
+      tokensFormatted: "0 tokens",
+    };
+    canonicalStats.set(key, {
+      inputTokens: existing.inputTokens + (entry.inputTokens || 0),
+      outputTokens: existing.outputTokens + (entry.outputTokens || 0),
+      totalTokens: existing.totalTokens + (entry.totalTokens || 0),
+      calls: existing.calls + (entry.calls || 0),
+      cost: existing.cost + (entry.cost || 0),
+      costFormatted: `$${(existing.cost + (entry.cost || 0)).toFixed(4)}`,
+      tokensFormatted: entry.tokensFormatted || existing.tokensFormatted,
+    });
+  }
+  const roleStats = new Map();
+  const roleStatsCanonical = new Map();
+  for (const entry of roleUsage) {
+    const roleKey = entry.role?.toLowerCase() || "unknown";
+    const key = `${roleKey}|${entry.model}`;
+    const canonicalKey = `${roleKey}|${canonicalizeModelName(entry.model)}`;
+    const existing = roleStats.get(key) || {
+      inputTokens: 0,
+      outputTokens: 0,
+      totalTokens: 0,
+      calls: 0,
+      cost: 0,
+      costFormatted: "$0.0000",
+    };
+    roleStats.set(key, {
+      inputTokens: existing.inputTokens + (entry.input_tokens || 0),
+      outputTokens: existing.outputTokens + (entry.output_tokens || 0),
+      totalTokens: existing.totalTokens + (entry.total_tokens || 0),
+      calls: existing.calls + (entry.calls || 0),
+      cost: existing.cost,
+      costFormatted: existing.costFormatted,
+    });
+
+    const canonicalExisting = roleStatsCanonical.get(canonicalKey) || {
+      inputTokens: 0,
+      outputTokens: 0,
+      totalTokens: 0,
+      calls: 0,
+      cost: 0,
+      costFormatted: "$0.0000",
+    };
+    roleStatsCanonical.set(canonicalKey, {
+      inputTokens: canonicalExisting.inputTokens + (entry.input_tokens || 0),
+      outputTokens: canonicalExisting.outputTokens + (entry.output_tokens || 0),
+      totalTokens: canonicalExisting.totalTokens + (entry.total_tokens || 0),
+      calls: canonicalExisting.calls + (entry.calls || 0),
+      cost: canonicalExisting.cost,
+      costFormatted: canonicalExisting.costFormatted,
+    });
+  }
+
+  const roles = [
+    { role: "Planner", model: project.planner_model },
+    { role: "Subtask", model: project.executor_model },
+    { role: "Voter", model: project.vote_model || project.executor_model },
+  ];
+
+  return roles
+    .filter((entry) => entry.model)
+    .map((entry) => {
+      const direct = modelStats.get(entry.model);
+      const normalized = modelStats.get(normalizeModelKey(entry.model));
+      const canonical = canonicalStats.get(canonicalizeModelName(entry.model));
+      const roleKey = `${entry.role.toLowerCase()}|${entry.model}`;
+      const roleKeyNormalized = `${entry.role.toLowerCase()}|${normalizeModelKey(entry.model)}`;
+      const roleKeyCanonical = `${entry.role.toLowerCase()}|${canonicalizeModelName(entry.model)}`;
+      const roleData = roleStats.get(roleKey) ||
+        roleStats.get(roleKeyNormalized) ||
+        roleStatsCanonical.get(roleKeyCanonical);
+      const data = roleData || direct || normalized || canonical;
+      return {
+        role: entry.role,
+        model: entry.model,
+        inputTokens: data?.inputTokens || 0,
+        outputTokens: data?.outputTokens || 0,
+        totalTokens: data?.totalTokens || 0,
+        calls: data?.calls || 0,
+        cost: data?.cost || 0,
+        costFormatted: data?.costFormatted || "$0.0000",
+        tokensFormatted: data?.tokensFormatted || formatTokensCount(data?.totalTokens || 0),
+      };
+    });
+}
+
 async function handleApi(req, res) {
   const url = new URL(req.url, `http://${req.headers.host}`);
   const chunks = [];
@@ -343,6 +465,7 @@ async function handleApi(req, res) {
           planningModel: planningModel || model,
           filePath: "out/demo.log",
           llmRegistry: llms,
+          resourceMonitor,
         });
         taskQueue.add(task);
         const { results, pending } = await runTaskSequential(task);
@@ -405,6 +528,8 @@ async function handleApi(req, res) {
           temperature: temperature !== undefined ? temperature : undefined,
           initialSamples: initialSamples || 2,
           redFlags: redFlags || [],
+          projectId,
+          resourceMonitor,
         });
         task.projectId = projectId; // Associate with project
         taskQueue.add(task);
@@ -547,7 +672,17 @@ async function handleApi(req, res) {
         const projectId = url.searchParams.get("projectId");
         if (!projectId) return sendJson(res, 400, { error: "projectId required" });
         const metrics = resourceMonitor.getProjectMetrics(projectId);
-        return sendJson(res, 200, metrics || { models: [], totalTokens: 0, totalCost: 0, totalCostFormatted: "$0.00", totalTokensFormatted: "0k" });
+        const project = featureStore.getProject(projectId);
+        const roleUsage = resourceMonitor.getProjectRoleUsage(projectId);
+        const roles = buildRoleMetrics(project, metrics, roleUsage);
+        return sendJson(res, 200, metrics ? { ...metrics, roles } : {
+          models: [],
+          roles,
+          totalTokens: 0,
+          totalCost: 0,
+          totalCostFormatted: "$0.0000",
+          totalTokensFormatted: "0 tokens",
+        });
       }
 
       // ==================== WIZARD ENDPOINTS ====================
@@ -1149,6 +1284,18 @@ async function handleApi(req, res) {
         }
       }
 
+      // Mark feature as completed (human-in-the-loop approval)
+      if (url.pathname.match(/^\/api\/v2\/features\/[^/]+\/mark-completed$/) && req.method === "POST") {
+        const featureId = url.pathname.split("/")[4];
+
+        try {
+          const updatedFeature = featureManager.markAsCompleted(featureId);
+          return sendJson(res, 200, { ok: true, feature: updatedFeature });
+        } catch (err) {
+          return sendJson(res, 400, { error: err.message });
+        }
+      }
+
       // Get execution status for a feature
       if (url.pathname.match(/^\/api\/v2\/features\/[^/]+\/status$/) && req.method === "GET") {
         const featureId = url.pathname.split("/")[4];
@@ -1157,6 +1304,75 @@ async function handleApi(req, res) {
           return sendJson(res, 404, { error: "Feature not found" });
         }
         return sendJson(res, 200, status);
+      }
+
+      // Chat with feature (human-in-the-loop conversation)
+      if (url.pathname.match(/^\/api\/v2\/features\/[^/]+\/chat$/) && req.method === "POST") {
+        const featureId = url.pathname.split("/")[4];
+        const { message } = body;
+
+        if (!message) {
+          return sendJson(res, 400, { error: "message is required" });
+        }
+
+        const feature = featureStore.getFeature(featureId);
+        if (!feature) {
+          return sendJson(res, 404, { error: "Feature not found" });
+        }
+
+        const project = featureStore.getProject(feature.project_id);
+        const plannerModel = project?.planner_model;
+
+        if (!plannerModel) {
+          return sendJson(res, 400, { error: "No planner model configured for project" });
+        }
+
+        try {
+          // Ensure provider is registered
+          const providerKey = featureManager._ensureProvider(plannerModel);
+          const provider = llms.get(providerKey);
+
+          if (!provider) {
+            return sendJson(res, 400, { error: `Provider not found: ${plannerModel}` });
+          }
+
+          // Get context
+          const subtasks = featureStore.getSubtasksByFeature(featureId);
+          const completedCount = subtasks.filter(st => st.status === 'completed').length;
+
+          const prompt = `You are an AI assistant helping with feature development in Ultracode.
+
+**Feature:** ${feature.name}
+**Description:** ${feature.description || 'No description'}
+**Priority:** ${feature.priority} (A=Essential, B=Important, C=Nice-to-have)
+**Status:** ${feature.status}
+**Progress:** ${completedCount}/${subtasks.length} subtasks completed
+
+**User Message:** ${message}
+
+Provide a helpful response. If the user is asking about the feature status or next steps, be specific. If they're reporting an issue, acknowledge it and suggest potential solutions.
+
+Keep responses concise and actionable.`;
+
+          const response = await provider.generate(prompt);
+          const normalized = normalizeLLMResponse(response, provider);
+          if (resourceMonitor && project?.id) {
+            resourceMonitor.recordProjectPrompt(project.id, normalized.model, prompt, normalized.content, {
+              usage: normalized.usage,
+            });
+          }
+
+          // Record chat event
+          featureStore.recordEvent(project.id, featureId, null, "feature_chat", {
+            userMessage: message.substring(0, 100),
+            responsePreview: normalized.content.substring(0, 100),
+          });
+
+          return sendJson(res, 200, { ok: true, response: normalized.content });
+        } catch (err) {
+          console.error("[Feature Chat] Error:", err);
+          return sendJson(res, 500, { error: err.message });
+        }
       }
 
       // Add subtask via chat (for feature adjustments)
@@ -1198,6 +1414,7 @@ async function handleApi(req, res) {
           llmRegistry: llms,
           plannerModel,
           configStore,
+          resourceMonitor,
         });
 
         // Create new subtasks

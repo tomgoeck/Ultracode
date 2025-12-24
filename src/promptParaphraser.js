@@ -1,3 +1,5 @@
+const { normalizeLLMResponse } = require("./llmUtils");
+
 /**
  * PromptParaphraser - Rephrases prompts to decorrelate errors in voting (MAKER requirement)
  *
@@ -8,10 +10,12 @@ class PromptParaphraser {
   /**
    * @param {import("./llmRegistry").LLMRegistry} llmRegistry
    * @param {string} [modelName="gpt-4o-mini"] - Cheap model for paraphrasing
+   * @param {Object} [resourceMonitor]
    */
-  constructor(llmRegistry, modelName = "gpt-4o-mini") {
+  constructor(llmRegistry, modelName = "gpt-4o-mini", resourceMonitor = null) {
     this.llmRegistry = llmRegistry;
     this.modelName = modelName;
+    this.resourceMonitor = resourceMonitor;
     this.cache = new Map(); // Cache paraphrases to avoid redundant API calls
   }
 
@@ -21,9 +25,10 @@ class PromptParaphraser {
    * @param {number} round - Current voting round
    * @param {number} sample - Sample number within round
    * @param {string} [modelName] - Optional model override (uses voter model if not specified)
+   * @param {Object} [meta]
    * @returns {Promise<string>} - Paraphrased prompt or original on fallback
    */
-  async paraphrase(prompt, round, sample, modelName = null) {
+  async paraphrase(prompt, round, sample, modelName = null, meta = {}) {
     // Skip paraphrasing for the very first sample to save costs
     if (round === 0 && sample === 0) {
       return prompt;
@@ -57,15 +62,24 @@ ${prompt}
 REPHRASED INSTRUCTION (preserve exact meaning):`;
 
       // Use higher temperature for more variation
-      const paraphrased = await provider.generate(paraphrasePrompt, { temperature: 0.7 });
+      const response = await provider.generate(paraphrasePrompt, { temperature: 0.7 });
+      const normalized = normalizeLLMResponse(response, provider);
 
-      if (!paraphrased || paraphrased.trim().length === 0) {
+      if (this.resourceMonitor && meta.projectId) {
+        const role = meta.role || "voter";
+        this.resourceMonitor.recordProjectPrompt(meta.projectId, normalized.model, paraphrasePrompt, normalized.content, {
+          usage: normalized.usage,
+          role,
+        });
+      }
+
+      if (!normalized.content || normalized.content.trim().length === 0) {
         console.warn("[PromptParaphraser] Empty paraphrase result, using original");
         return prompt;
       }
 
       // Clean up common response prefixes
-      const cleaned = paraphrased
+      const cleaned = normalized.content
         .replace(/^(REPHRASED INSTRUCTION:|Here'?s? the rephrased instruction:?|Sure[,!]?)/i, "")
         .trim();
 

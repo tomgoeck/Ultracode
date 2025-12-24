@@ -1,6 +1,7 @@
 const fs = require("fs");
 const path = require("path");
 const { spawnSync } = require("child_process");
+const { normalizeLLMResponse } = require("./llmUtils");
 
 /**
  * WizardAgent handles the 3-page project creation wizard:
@@ -16,11 +17,13 @@ class WizardAgent {
    * @param {import('./featureStore').FeatureStore} opts.featureStore
    * @param {import('./llmRegistry').LLMRegistry} opts.llmRegistry
    * @param {import('./providers/tavilyProvider').TavilyProvider} [opts.tavilyProvider]
+   * @param {Object} [opts.resourceMonitor]
    */
-  constructor({ featureStore, llmRegistry, tavilyProvider = null }) {
+  constructor({ featureStore, llmRegistry, tavilyProvider = null, resourceMonitor = null }) {
     this.featureStore = featureStore;
     this.llmRegistry = llmRegistry;
     this.tavilyProvider = tavilyProvider;
+    this.resourceMonitor = resourceMonitor;
     this.activeWizards = new Map(); // projectId -> wizard state
   }
 
@@ -255,15 +258,22 @@ Feel free to answer all at once or we can go through them one by one. I can also
     // Generate response
     const prompt = messages.map((m) => `${m.role}: ${m.content}`).join("\n\n");
     const response = await provider.generate(prompt, { temperature: 0.7, maxTokens: 16000 });
+    const normalized = normalizeLLMResponse(response, provider);
+    if (this.resourceMonitor && projectId) {
+      this.resourceMonitor.recordProjectPrompt(projectId, normalized.model, prompt, normalized.content, {
+        usage: normalized.usage,
+        role: "planner",
+      });
+    }
 
     // Add assistant response to conversation
-    wizard.conversation.push({ role: "assistant", content: response });
+    wizard.conversation.push({ role: "assistant", content: normalized.content });
     if (shouldPersist) {
-      this.featureStore.addWizardMessage(projectId, "assistant", response);
+      this.featureStore.addWizardMessage(projectId, "assistant", normalized.content);
     }
 
     // Check if response contains a summary
-    const summaryMatch = response.match(/```summary\n([\s\S]*?)```/);
+    const summaryMatch = normalized.content.match(/```summary\n([\s\S]*?)```/);
     if (summaryMatch) {
       wizard.projectSummary = this.parseSummary(summaryMatch[1]);
       wizard.extractedFeatures = wizard.projectSummary.features || [];
@@ -275,7 +285,7 @@ Feel free to answer all at once or we can go through them one by one. I can also
     });
 
     return {
-      response,
+      response: normalized.content,
       hasSummary: !!summaryMatch,
       summary: wizard.projectSummary,
       conversationLength: wizard.conversation.length,
@@ -530,13 +540,20 @@ src/
 ===END_FEATURES_JSON===`;
 
     const response = await provider.generate(prompt, { temperature: 0.3, maxTokens: 16000 });
+    const normalized = normalizeLLMResponse(response, provider);
+    if (this.resourceMonitor && projectId) {
+      this.resourceMonitor.recordProjectPrompt(projectId, normalized.model, prompt, normalized.content, {
+        usage: normalized.usage,
+        role: "planner",
+      });
+    }
 
     // Extract project.md block
-    const projectMdMatch = response.match(/===PROJECT_MD===\s*([\s\S]*?)\s*===END_PROJECT_MD===/);
+    const projectMdMatch = normalized.content.match(/===PROJECT_MD===\s*([\s\S]*?)\s*===END_PROJECT_MD===/);
     const projectMdContent = projectMdMatch ? projectMdMatch[1].trim() : null;
 
     // Extract features.json block
-    const featuresJsonMatch = response.match(/===FEATURES_JSON===\s*([\s\S]*?)\s*===END_FEATURES_JSON===/);
+    const featuresJsonMatch = normalized.content.match(/===FEATURES_JSON===\s*([\s\S]*?)\s*===END_FEATURES_JSON===/);
     let featuresJsonContent = null;
     const warnings = [];
     if (!projectMdMatch) {
@@ -578,7 +595,7 @@ src/
     return {
       projectMd: projectMdContent,
       featuresJson: featuresJsonContent,
-      raw: response,
+      raw: normalized.content,
       warnings,
       success,
     };

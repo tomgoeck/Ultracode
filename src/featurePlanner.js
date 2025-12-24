@@ -1,3 +1,5 @@
+const { normalizeLLMResponse } = require("./llmUtils");
+
 /**
  * FeaturePlanner: Decomposes a feature into atomic subtasks.
  * Two-stage agent:
@@ -168,6 +170,7 @@ function parseSubtasks(response) {
  * @param {Object} opts.context - Context (projectMd, featuresJson, completedFeatures)
  * @param {import('./llmRegistry').LLMRegistry} opts.llmRegistry
  * @param {string} opts.plannerModel - Name of the planner model to use
+ * @param {Object} [opts.resourceMonitor]
  * @param {Array<string>} [opts.fallbackModels]
  * @param {string|null} [opts.projectPath] - Absolute path to project root (for file reads)
  * @returns {Promise<Array<Object>>} Array of subtasks
@@ -179,6 +182,7 @@ async function planFeature({
   llmRegistry,
   plannerModel,
   configStore,
+  resourceMonitor,
   fallbackModels = [],
   projectPath = null,
   onProgress = () => {},
@@ -290,9 +294,16 @@ Return JSON only:
         if (!provider) continue;
         try {
           onProgress(`planning: inspect-request (round=${rounds}, model=${model})`);
-          const resp = await provider.generate(inspectPrompt, { temperature: 0.2, maxTokens: 1600 });
-          const match = resp.match(/```json\\s*([\\s\\S]*?)```/);
-          const jsonStr = (match ? match[1] : resp || "").trim();
+          const response = await provider.generate(inspectPrompt, { temperature: 0.2, maxTokens: 4000 });
+          const normalized = normalizeLLMResponse(response, provider);
+          if (resourceMonitor && project?.id) {
+            resourceMonitor.recordProjectPrompt(project.id, normalized.model, inspectPrompt, normalized.content, {
+              usage: normalized.usage,
+              role: "planner",
+            });
+          }
+          const match = normalized.content.match(/```json\\s*([\\s\\S]*?)```/);
+          const jsonStr = (match ? match[1] : normalized.content || "").trim();
           const parsed = JSON.parse(jsonStr);
           const candidates = Array.isArray(parsed)
             ? parsed
@@ -386,15 +397,23 @@ Return JSON only:
       onProgress(`planning: generate subtasks (model=${m})`);
       const response = await provider.generate(prompt, {
         temperature: 0.3,
-        maxTokens: 12000,
+        maxTokens: 50000,
       });
 
-      if (!response || !response.trim()) {
+      const normalized = normalizeLLMResponse(response, provider);
+      if (resourceMonitor && project?.id) {
+        resourceMonitor.recordProjectPrompt(project.id, normalized.model, prompt, normalized.content, {
+          usage: normalized.usage,
+          role: "planner",
+        });
+      }
+
+      if (!normalized.content || !normalized.content.trim()) {
         lastError = new Error(`Empty response from model ${m}`);
         continue;
       }
 
-      const subtasks = parseSubtasks(response);
+      const subtasks = parseSubtasks(normalized.content);
       const looksFallback =
         subtasks.length === 1 &&
         (subtasks[0].intent?.startsWith("Implement feature:") ||
@@ -454,9 +473,10 @@ Return JSON only:
  * @param {Object} opts.context - Context
  * @param {import('./llmRegistry').LLMRegistry} opts.llmRegistry
  * @param {string} opts.plannerModel
+ * @param {Object} [opts.resourceMonitor]
  * @returns {Promise<Array<Object>>} New subtasks to add
  */
-async function addSubtasksFromRequirement({ feature, requirement, existingSubtasks, context, llmRegistry, plannerModel, configStore }) {
+async function addSubtasksFromRequirement({ feature, requirement, existingSubtasks, context, llmRegistry, plannerModel, configStore, resourceMonitor }) {
   // Ensure provider is registered (same logic as planFeature)
   const ensureProvider = (modelStr) => {
     if (!modelStr.includes(':')) {
@@ -538,7 +558,15 @@ Generate only the NEW subtasks:`;
     maxTokens: 1000,
   });
 
-  return parseSubtasks(response);
+  const normalized = normalizeLLMResponse(response, provider);
+  if (resourceMonitor && feature?.project_id) {
+    resourceMonitor.recordProjectPrompt(feature.project_id, normalized.model, prompt, normalized.content, {
+      usage: normalized.usage,
+      role: "planner",
+    });
+  }
+
+  return parseSubtasks(normalized.content);
 }
 
 module.exports = {

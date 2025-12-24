@@ -32,7 +32,18 @@ class ClaudeProvider {
       throw new Error(`Claude generate failed: ${res.status} ${text}`);
     }
     const json = await res.json();
-    return json.content?.[0]?.text || "";
+    const content = json.content?.[0]?.text || "";
+    const usage = json.usage ? {
+      inputTokens: json.usage.input_tokens ?? null,
+      outputTokens: json.usage.output_tokens ?? null,
+      totalTokens: json.usage.total_tokens ?? null,
+    } : null;
+    return {
+      content,
+      usage,
+      model: json.model || this.model,
+      raw: json,
+    };
   }
 
   async listModels() {

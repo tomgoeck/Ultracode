@@ -4,6 +4,7 @@
 const puppeteer = require('puppeteer');
 const fs = require('fs');
 const path = require('path');
+const { normalizeLLMResponse } = require('./llmUtils');
 
 class TestRunner {
   constructor(llmRegistry) {
@@ -166,7 +167,8 @@ class TestRunner {
       }
 
       // Parse response
-      const result = this._parseVerificationResponse(response);
+      const normalized = normalizeLLMResponse(response, provider);
+      const result = this._parseVerificationResponse(normalized.content);
 
       return {
         passed: result.passed,

@@ -7,6 +7,7 @@ const app = {
         stoppingFeatureId: null,
         devServer: null,
         editingFeatureId: null,
+        showTokenMonitor: false,
         sse: null,
         wizard: {
             currentPage: 1,
@@ -659,12 +660,19 @@ const app = {
             const details = document.getElementById('resource-details');
             const total = document.getElementById('resource-total');
 
-            monitor.classList.remove('hidden');
+            monitor.classList.toggle('hidden', !this.state.showTokenMonitor);
 
-            if (data.models && data.models.length > 0) {
-                details.innerHTML = data.models.map(m =>
-                    `<div class="text-gray-400">${m.name}: <span class="text-gray-300">${m.tokensFormatted}</span> <span class="text-gray-500">(${m.costFormatted})</span></div>`
-                ).join('');
+            const entries = (Array.isArray(data.roles) && data.roles.length > 0)
+                ? data.roles
+                : (data.models || []);
+
+            if (entries.length > 0) {
+                details.innerHTML = entries.map(m => {
+                    const label = m.role
+                        ? `${m.role} (${m.model || 'unknown'})`
+                        : m.name;
+                    return `<div class="text-gray-400">${label}: <span class="text-gray-300">${m.tokensFormatted}</span> <span class="text-gray-500">(${m.costFormatted})</span></div>`;
+                }).join('');
                 total.innerHTML = `Total: <span class="text-white">${data.totalCostFormatted}</span>`;
             } else {
                 details.innerHTML = `<div class="text-gray-500">No token data yet</div>`;
@@ -676,6 +684,16 @@ const app = {
         }
     },
 
+    toggleTokenMonitor() {
+        this.state.showTokenMonitor = !this.state.showTokenMonitor;
+        const monitor = document.getElementById('resource-monitor');
+        if (!monitor) return;
+        monitor.classList.toggle('hidden', !this.state.showTokenMonitor);
+        if (this.state.showTokenMonitor && this.state.activeProject) {
+            this.loadResourceMetrics(this.state.activeProject);
+        }
+    },
+
     renderFeatureItem(feature) {
         const statusColors = {
             'pending': 'bg-gray-700 text-gray-300',
@@ -683,7 +701,8 @@ const app = {
             'paused': 'bg-orange-700 text-orange-300',
             'completed': 'bg-green-700 text-green-300',
             'verified': 'bg-blue-700 text-blue-300',
-            'failed': 'bg-red-700 text-red-300'
+            'failed': 'bg-red-700 text-red-300',
+            'human_testing': 'bg-purple-700 text-purple-300'
         };
 
         const priorityColors = {
@@ -698,7 +717,8 @@ const app = {
             'paused': '⏸',
             'completed': '✓',
             'verified': '✓',
-            'failed': '✕'
+            'failed': '✕',
+            'human_testing': '👤'
         };
 
         const statusColor = statusColors[feature.status] || statusColors['pending'];
@@ -822,16 +842,53 @@ const app = {
                     'pending': 'bg-gray-700 text-gray-300',
                     'running': 'bg-yellow-700 text-yellow-300',
                     'completed': 'bg-green-700 text-green-300',
-                    'failed': 'bg-red-700 text-red-300'
+                    'failed': 'bg-red-700 text-red-300',
+                    'human_testing': 'bg-purple-700 text-purple-300'
                 };
                 statusBadge.className = `px-2 py-0.5 rounded text-[10px] ${statusColors[feature.status] || 'bg-gray-700 text-gray-300'}`;
                 statusBadge.innerText = feature.status;
+
+                // Show/hide "Mark as Completed" button based on status
+                const markCompletedBtn = document.getElementById('btn-mark-completed');
+                if (feature.status === 'human_testing') {
+                    markCompletedBtn.classList.remove('hidden');
+                } else {
+                    markCompletedBtn.classList.add('hidden');
+                }
 
                 // Load subtasks
                 await this.loadSubtasks(featureId);
             }
         } catch (err) {
             console.error('Failed to load feature details:', err);
+        }
+    },
+
+    async markFeatureCompleted() {
+        if (!this.state.activeFeature) {
+            alert('No feature selected');
+            return;
+        }
+
+        try {
+            const res = await fetch(`/api/v2/features/${this.state.activeFeature}/mark-completed`, {
+                method: 'POST'
+            });
+
+            const data = await res.json();
+
+            if (data.ok) {
+                this.logToTerminal('✓ Feature marked as completed');
+
+                // Reload feature list and details
+                await this.loadFeatures(this.state.activeProject);
+                await this.selectFeature(this.state.activeFeature);
+            } else {
+                alert(`Failed to mark as completed: ${data.error || 'Unknown error'}`);
+            }
+        } catch (err) {
+            console.error('Failed to mark feature as completed:', err);
+            alert(`Error: ${err.message}`);
         }
     },
 
@@ -1245,7 +1302,7 @@ const app = {
         this.logToTerminal(`[Chat] ${message}`);
 
         try {
-            const res = await fetch(`/api/features/${this.state.activeFeature}/chat`, {
+            const res = await fetch(`/api/v2/features/${this.state.activeFeature}/chat`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ message })
@@ -1253,8 +1310,10 @@ const app = {
 
             const data = await res.json();
 
-            if (data.response) {
+            if (data.ok && data.response) {
                 this.logToTerminal(`[AI] ${data.response}`);
+            } else if (data.error) {
+                this.logToTerminal(`[Error] ${data.error}`);
             }
         } catch (err) {
             console.error('Feature chat error:', err);
@@ -1278,7 +1337,7 @@ const app = {
         editor.value = 'Loading...';
 
         try {
-            const res = await fetch(`/api/projects/${this.state.activeProject}/project-md`);
+            const res = await fetch(`/api/v2/project-md?projectId=${this.state.activeProject}`);
             const data = await res.json();
 
             if (data.content !== undefined) {
@@ -1304,10 +1363,10 @@ const app = {
         const content = document.getElementById('project-md-editor').value;
 
         try {
-            const res = await fetch(`/api/projects/${this.state.activeProject}/project-md`, {
-                method: 'POST',
+            const res = await fetch(`/api/v2/project-md`, {
+                method: 'PUT',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ content })
+                body: JSON.stringify({ projectId: this.state.activeProject, content })
             });
 
             const data = await res.json();
@@ -1710,6 +1769,27 @@ const app = {
                         this.loadFeatures(this.state.activeProject);
                         if (data.featureId === this.state.activeFeature) {
                             this.loadSubtasks(data.featureId);
+                        }
+                    }
+                }
+                if (data.type === 'feature-awaiting-test') {
+                    if (data.projectId === this.state.activeProject) {
+                        this.logToTerminal(`👤 Feature ready for human testing (Priority ${data.priority})`);
+                        this.state.runningFeatureId = null;
+                        this.state.stoppingFeatureId = null;
+                        this.updateExecuteButton();
+                        this.loadFeatures(this.state.activeProject);
+                        if (data.featureId === this.state.activeFeature) {
+                            this.selectFeature(data.featureId); // Refresh to show "Mark as Completed" button
+                        }
+                    }
+                }
+                if (data.type === 'feature-manually-completed') {
+                    if (data.projectId === this.state.activeProject) {
+                        this.logToTerminal(`✓ Feature manually marked as completed`);
+                        this.loadFeatures(this.state.activeProject);
+                        if (data.featureId === this.state.activeFeature) {
+                            this.selectFeature(data.featureId); // Refresh to hide button
                         }
                     }
                 }

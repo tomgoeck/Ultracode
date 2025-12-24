@@ -10,8 +10,12 @@ const { v4: uuidv4 } = require("crypto");
  * @param {string} ctx.voteModel
  * @param {string} [ctx.planningModel] - optional model for planning (defaults to ctx.model)
  * @param {any} ctx.llmRegistry - access to the LLM to generate the plan
+ * @param {string} [ctx.projectId]
+ * @param {Object} [ctx.resourceMonitor]
  */
-async function createPlan({ id, title, goal, model, voteModel, planningModel, llmRegistry, k, nSamples, initialSamples, temperature, redFlags }) {
+const { normalizeLLMResponse } = require("./llmUtils");
+
+async function createPlan({ id, title, goal, model, voteModel, planningModel, llmRegistry, k, nSamples, initialSamples, temperature, redFlags, projectId, resourceMonitor }) {
   const plannerModel = planningModel || model;
   const provider = llmRegistry.get(plannerModel);
   if (!provider) {
@@ -99,17 +103,24 @@ BAD Intents (generic):
 
   console.log(`[Planner] Generating plan for: ${title} (planner=${plannerModel})`);
   const response = await provider.generate(prompt, { maxTokens: 2048, temperature: 0.3 });
-  console.log(`[Planner] Response length: ${response?.length || 0} chars`);
+  const normalized = normalizeLLMResponse(response, provider);
+  if (resourceMonitor && projectId) {
+    resourceMonitor.recordProjectPrompt(projectId, normalized.model, prompt, normalized.content, {
+      usage: normalized.usage,
+      role: "planner",
+    });
+  }
+  console.log(`[Planner] Response length: ${normalized.content?.length || 0} chars`);
 
   let planData;
   try {
     // Basic cleanup for markdown code blocks (response is the text content string)
-    const cleanJson = response.replace(/```json/g, "").replace(/```/g, "").trim();
+    const cleanJson = normalized.content.replace(/```json/g, "").replace(/```/g, "").trim();
     planData = JSON.parse(cleanJson);
     console.log(`[Planner] Successfully parsed plan with ${planData.steps?.length || 0} steps`);
   } catch (err) {
     console.error("Failed to parse plan JSON. Error:", err.message);
-    console.error("Response preview:", response?.substring(0, 200));
+    console.error("Response preview:", normalized.content?.substring(0, 200));
     // Fallback simple plan
     planData = {
         steps: [

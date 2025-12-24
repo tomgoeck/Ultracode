@@ -4,7 +4,7 @@
  * Provides transparency into LLM resource consumption per task/step.
  */
 class ResourceMonitor {
-  constructor() {
+  constructor({ featureStore } = {}) {
     // Pricing per 1000 tokens (USD) - updated as of Dec 2024
     this.tokenPricing = {
       // OpenAI
@@ -40,6 +40,7 @@ class ResourceMonitor {
 
     this.taskMetrics = new Map(); // taskId -> metrics
     this.projectMetrics = new Map(); // projectId -> { models: { modelName: { tokens, cost } } }
+    this.featureStore = featureStore || null;
   }
 
   /**
@@ -60,9 +61,11 @@ class ResourceMonitor {
    * @param {string} prompt
    * @param {string} output
    */
-  recordPromptCall(taskId, stepId, model, prompt, output) {
-    const inputTokens = this.estimateTokens(prompt);
-    const outputTokens = this.estimateTokens(output);
+  recordPromptCall(taskId, stepId, model, prompt, output, options = {}) {
+    const { usage, projectId, role } = options;
+    const tokens = this.resolveUsage(prompt, output, usage);
+    const inputTokens = tokens.inputTokens;
+    const outputTokens = tokens.outputTokens;
 
     const pricing = this.tokenPricing[model] || { input: 0, output: 0 };
     const cost = ((inputTokens * pricing.input) + (outputTokens * pricing.output)) / 1000;
@@ -86,15 +89,19 @@ class ResourceMonitor {
       model,
       inputTokens,
       outputTokens,
-      totalTokens: inputTokens + outputTokens,
+      totalTokens: tokens.totalTokens,
       cost,
       timestamp: Date.now(),
     });
     metrics.totalInputTokens += inputTokens;
     metrics.totalOutputTokens += outputTokens;
-    metrics.totalTokens += inputTokens + outputTokens;
+    metrics.totalTokens += tokens.totalTokens;
     metrics.totalCost += cost;
     metrics.models.add(model);
+
+    if (projectId) {
+      this.recordProjectPrompt(projectId, model, prompt, output, { usage, tokens, role });
+    }
   }
 
   /**
@@ -199,10 +206,12 @@ class ResourceMonitor {
    * @param {string} prompt
    * @param {string} output
    */
-  recordProjectPrompt(projectId, model, prompt, output) {
-    const inputTokens = this.estimateTokens(prompt);
-    const outputTokens = this.estimateTokens(output);
-    const totalTokens = inputTokens + outputTokens;
+  recordProjectPrompt(projectId, model, prompt, output, options = {}) {
+    const tokens = options.tokens || this.resolveUsage(prompt, output, options.usage);
+    const role = options.role;
+    const inputTokens = tokens.inputTokens;
+    const outputTokens = tokens.outputTokens;
+    const totalTokens = tokens.totalTokens;
 
     const pricing = this.tokenPricing[model] || { input: 0, output: 0 };
     const cost = ((inputTokens * pricing.input) + (outputTokens * pricing.output)) / 1000;
@@ -239,6 +248,27 @@ class ResourceMonitor {
     projectData.totalTokens += totalTokens;
     projectData.totalCost += cost;
     projectData.lastUpdated = Date.now();
+
+    if (this.featureStore && typeof this.featureStore.recordModelUsage === "function") {
+      this.featureStore.recordModelUsage({
+        projectId,
+        model,
+        inputTokens,
+        outputTokens,
+        totalTokens,
+      });
+    }
+
+    if (role && this.featureStore && typeof this.featureStore.recordModelUsageByRole === "function") {
+      this.featureStore.recordModelUsageByRole({
+        projectId,
+        role,
+        model,
+        inputTokens,
+        outputTokens,
+        totalTokens,
+      });
+    }
   }
 
   /**
@@ -247,23 +277,106 @@ class ResourceMonitor {
    * @returns {Object|null}
    */
   getProjectMetrics(projectId) {
+    if (this.featureStore && typeof this.featureStore.getProjectModelUsage === "function") {
+      const rows = this.featureStore.getProjectModelUsage(projectId);
+      if (!rows || !rows.length) return null;
+      return this.formatProjectMetrics(projectId, rows.map((row) => ({
+        name: row.model,
+        inputTokens: row.input_tokens || 0,
+        outputTokens: row.output_tokens || 0,
+        totalTokens: row.total_tokens || 0,
+        calls: row.calls || 0,
+        updatedAt: row.updated_at || null,
+      })));
+    }
+
     const metrics = this.projectMetrics.get(projectId);
     if (!metrics) return null;
+    const models = Object.entries(metrics.models).map(([name, data]) => ({
+      name,
+      inputTokens: data.inputTokens || 0,
+      outputTokens: data.outputTokens || 0,
+      totalTokens: data.totalTokens || 0,
+      cost: data.cost || 0,
+      calls: data.calls || 0,
+    }));
+    return this.formatProjectMetrics(projectId, models, metrics.lastUpdated);
+  }
+
+  getProjectRoleUsage(projectId) {
+    if (this.featureStore && typeof this.featureStore.getProjectRoleUsage === "function") {
+      return this.featureStore.getProjectRoleUsage(projectId);
+    }
+    return [];
+  }
+
+  resolveUsage(prompt, output, usage) {
+    let inputTokens = usage?.inputTokens ?? null;
+    let outputTokens = usage?.outputTokens ?? null;
+    let totalTokens = usage?.totalTokens ?? null;
+
+    if (totalTokens == null && (inputTokens != null || outputTokens != null)) {
+      totalTokens = (inputTokens || 0) + (outputTokens || 0);
+    }
+
+    if (totalTokens == null) {
+      inputTokens = this.estimateTokens(prompt);
+      outputTokens = this.estimateTokens(output);
+      totalTokens = inputTokens + outputTokens;
+      return { inputTokens, outputTokens, totalTokens };
+    }
+
+    if (inputTokens == null || outputTokens == null) {
+      const estimatedInput = this.estimateTokens(prompt);
+      if (inputTokens == null) {
+        inputTokens = Math.min(estimatedInput, totalTokens);
+      }
+      if (outputTokens == null) {
+        outputTokens = Math.max(totalTokens - inputTokens, 0);
+      }
+    }
+
+    return { inputTokens, outputTokens, totalTokens };
+  }
+
+  formatProjectMetrics(projectId, models, lastUpdated = null) {
+    const normalized = models.map((entry) => {
+      const inputTokens = Number.isFinite(entry.inputTokens) ? entry.inputTokens : Number(entry.inputTokens) || 0;
+      const outputTokens = Number.isFinite(entry.outputTokens) ? entry.outputTokens : Number(entry.outputTokens) || 0;
+      const totalTokens = Number.isFinite(entry.totalTokens) ? entry.totalTokens : Number(entry.totalTokens) || (inputTokens + outputTokens);
+      const pricing = this.tokenPricing[entry.name] || { input: 0, output: 0 };
+      const cost = ((inputTokens * pricing.input) + (outputTokens * pricing.output)) / 1000;
+      return {
+        name: entry.name,
+        inputTokens,
+        outputTokens,
+        totalTokens,
+        calls: entry.calls || 0,
+        cost,
+        costFormatted: `$${cost.toFixed(4)}`,
+        tokensFormatted: this.formatTokens(totalTokens),
+        updatedAt: entry.updatedAt || null,
+      };
+    });
+
+    const totalTokens = normalized.reduce((sum, m) => sum + (m.totalTokens || 0), 0);
+    const totalCost = normalized.reduce((sum, m) => sum + (m.cost || 0), 0);
+    const updated = lastUpdated || normalized.reduce((max, m) => Math.max(max, m.updatedAt || 0), 0) || Date.now();
 
     return {
-      projectId: metrics.projectId,
-      models: Object.entries(metrics.models).map(([name, data]) => ({
-        name,
-        ...data,
-        costFormatted: `$${data.cost.toFixed(4)}`,
-        tokensFormatted: `${(data.totalTokens / 1000).toFixed(1)}k`,
-      })),
-      totalTokens: metrics.totalTokens,
-      totalCost: metrics.totalCost,
-      totalCostFormatted: `$${metrics.totalCost.toFixed(4)}`,
-      totalTokensFormatted: `${(metrics.totalTokens / 1000).toFixed(1)}k`,
-      lastUpdated: metrics.lastUpdated,
+      projectId,
+      models: normalized,
+      totalTokens,
+      totalCost,
+      totalCostFormatted: `$${totalCost.toFixed(4)}`,
+      totalTokensFormatted: this.formatTokens(totalTokens),
+      lastUpdated: updated,
     };
+  }
+
+  formatTokens(count) {
+    const safe = Number.isFinite(count) ? count : 0;
+    return `${safe.toLocaleString()} tokens`;
   }
 }
 

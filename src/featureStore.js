@@ -148,6 +148,31 @@ class FeatureStore {
         timestamp INTEGER
       );
 
+      -- Model usage aggregates (per project/model)
+      CREATE TABLE IF NOT EXISTS model_usage (
+        project_id TEXT NOT NULL,
+        model TEXT NOT NULL,
+        input_tokens INTEGER DEFAULT 0,
+        output_tokens INTEGER DEFAULT 0,
+        total_tokens INTEGER DEFAULT 0,
+        calls INTEGER DEFAULT 0,
+        updated_at INTEGER,
+        PRIMARY KEY (project_id, model)
+      );
+
+      -- Model usage aggregates per role (planner/subtask/voter)
+      CREATE TABLE IF NOT EXISTS model_usage_by_role (
+        project_id TEXT NOT NULL,
+        role TEXT NOT NULL,
+        model TEXT NOT NULL,
+        input_tokens INTEGER DEFAULT 0,
+        output_tokens INTEGER DEFAULT 0,
+        total_tokens INTEGER DEFAULT 0,
+        calls INTEGER DEFAULT 0,
+        updated_at INTEGER,
+        PRIMARY KEY (project_id, role, model)
+      );
+
       -- Indexes for common queries
       CREATE INDEX IF NOT EXISTS idx_features_project ON features(project_id);
       CREATE INDEX IF NOT EXISTS idx_features_status ON features(status);
@@ -155,6 +180,8 @@ class FeatureStore {
       CREATE INDEX IF NOT EXISTS idx_events_project ON events(project_id);
       CREATE INDEX IF NOT EXISTS idx_events_feature ON events(feature_id);
       CREATE INDEX IF NOT EXISTS idx_events_type ON events(event_type);
+      CREATE INDEX IF NOT EXISTS idx_model_usage_project ON model_usage(project_id);
+      CREATE INDEX IF NOT EXISTS idx_model_usage_role_project ON model_usage_by_role(project_id);
     `;
     this.run(ddl);
   }
@@ -230,9 +257,99 @@ class FeatureStore {
       DELETE FROM events WHERE project_id = ${this.q(projectId)};
       DELETE FROM subtasks WHERE feature_id IN (SELECT id FROM features WHERE project_id = ${this.q(projectId)});
       DELETE FROM features WHERE project_id = ${this.q(projectId)};
+      DELETE FROM model_usage WHERE project_id = ${this.q(projectId)};
       DELETE FROM projects WHERE id = ${this.q(projectId)};
     `;
     this.run(sql);
+  }
+
+  // ==================== USAGE METRICS ====================
+
+  /**
+   * Record aggregated model usage for a project.
+   * @param {Object} entry
+   * @param {string} entry.projectId
+   * @param {string} entry.model
+   * @param {number} entry.inputTokens
+   * @param {number} entry.outputTokens
+   * @param {number} entry.totalTokens
+   */
+  recordModelUsage({ projectId, model, inputTokens, outputTokens, totalTokens }) {
+    if (!projectId || !model) return;
+    const now = Date.now();
+    const inTok = Number.isFinite(inputTokens) ? Math.max(0, Math.floor(inputTokens)) : 0;
+    const outTok = Number.isFinite(outputTokens) ? Math.max(0, Math.floor(outputTokens)) : 0;
+    const totalTok = Number.isFinite(totalTokens) ? Math.max(0, Math.floor(totalTokens)) : inTok + outTok;
+    const sql = `
+      INSERT INTO model_usage (project_id, model, input_tokens, output_tokens, total_tokens, calls, updated_at)
+      VALUES (${this.q(projectId)}, ${this.q(model)}, ${inTok}, ${outTok}, ${totalTok}, 1, ${now})
+      ON CONFLICT(project_id, model) DO UPDATE SET
+        input_tokens = input_tokens + ${inTok},
+        output_tokens = output_tokens + ${outTok},
+        total_tokens = total_tokens + ${totalTok},
+        calls = calls + 1,
+        updated_at = ${now};
+    `;
+    this.run(sql);
+  }
+
+  /**
+   * Record aggregated model usage for a project by role.
+   * @param {Object} entry
+   * @param {string} entry.projectId
+   * @param {string} entry.role
+   * @param {string} entry.model
+   * @param {number} entry.inputTokens
+   * @param {number} entry.outputTokens
+   * @param {number} entry.totalTokens
+   */
+  recordModelUsageByRole({ projectId, role, model, inputTokens, outputTokens, totalTokens }) {
+    if (!projectId || !role || !model) return;
+    const now = Date.now();
+    const inTok = Number.isFinite(inputTokens) ? Math.max(0, Math.floor(inputTokens)) : 0;
+    const outTok = Number.isFinite(outputTokens) ? Math.max(0, Math.floor(outputTokens)) : 0;
+    const totalTok = Number.isFinite(totalTokens) ? Math.max(0, Math.floor(totalTokens)) : inTok + outTok;
+    const sql = `
+      INSERT INTO model_usage_by_role (project_id, role, model, input_tokens, output_tokens, total_tokens, calls, updated_at)
+      VALUES (${this.q(projectId)}, ${this.q(role)}, ${this.q(model)}, ${inTok}, ${outTok}, ${totalTok}, 1, ${now})
+      ON CONFLICT(project_id, role, model) DO UPDATE SET
+        input_tokens = input_tokens + ${inTok},
+        output_tokens = output_tokens + ${outTok},
+        total_tokens = total_tokens + ${totalTok},
+        calls = calls + 1,
+        updated_at = ${now};
+    `;
+    this.run(sql);
+  }
+
+  /**
+   * Get aggregated model usage for a project.
+   * @param {string} projectId
+   * @returns {Array<Object>}
+   */
+  getProjectModelUsage(projectId) {
+    if (!projectId) return [];
+    return this.query(`
+      SELECT model, input_tokens, output_tokens, total_tokens, calls, updated_at
+      FROM model_usage
+      WHERE project_id = ${this.q(projectId)}
+      ORDER BY total_tokens DESC;
+    `);
+  }
+
+  /**
+   * Get aggregated model usage per role for a project.
+   * @param {string} projectId
+   * @returns {Array<Object>}
+   */
+  getProjectRoleUsage(projectId) {
+    if (!projectId) return [];
+    return this.query(`
+      SELECT role, model, input_tokens, output_tokens, total_tokens, calls, updated_at
+      FROM model_usage_by_role
+      WHERE project_id = ${this.q(projectId)}
+      ORDER BY role ASC, total_tokens DESC;
+    `);
   }
 
   // ==================== FEATURES ====================

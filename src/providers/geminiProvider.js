@@ -33,7 +33,18 @@ class GeminiProvider {
     }
     const json = await res.json();
     const parts = json.candidates?.[0]?.content?.parts || [];
-    return parts.map((p) => p.text || "").join("\n");
+    const content = parts.map((p) => p.text || "").join("\n");
+    const usage = json.usageMetadata ? {
+      inputTokens: json.usageMetadata.promptTokenCount ?? null,
+      outputTokens: json.usageMetadata.candidatesTokenCount ?? null,
+      totalTokens: json.usageMetadata.totalTokenCount ?? null,
+    } : null;
+    return {
+      content,
+      usage,
+      model: json.model || this.model,
+      raw: json,
+    };
   }
 
   async listModels() {

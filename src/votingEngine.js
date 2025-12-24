@@ -1,4 +1,5 @@
 const { RedFlagger } = require("./redFlagger");
+const { normalizeLLMResponse } = require("./llmUtils");
 
 // Implements a simple first-to-lead-by-k voting scheme with red-flag filtering.
 class VotingEngine {
@@ -25,7 +26,8 @@ class VotingEngine {
    *  redFlagRules?: import("./types").RedFlagRule[],
    *  taskId?: string,
    *  stepId?: string,
-   *  voteModel?: string
+   *  voteModel?: string,
+   *  projectId?: string
    * }} params
    * @returns {Promise<{ winner: import("./types").Candidate|null, candidates: import("./types").Candidate[], leadBy: number }>}
    */
@@ -42,6 +44,7 @@ class VotingEngine {
     taskId,
     stepId,
     voteModel,
+    projectId,
   }) {
     const candidates = [];
     const tally = new Map(); // output -> voteCount
@@ -65,30 +68,33 @@ class VotingEngine {
       if (this.paraphraser && sample > 0) {
         try {
           // Use voter model for paraphrasing
-          finalPrompt = await this.paraphraser.paraphrase(prompt, 0, sample, voteModel);
+          finalPrompt = await this.paraphraser.paraphrase(prompt, 0, sample, voteModel, { projectId, role: "voter" });
         } catch (err) {
           console.warn("[VotingEngine] Paraphrase failed, using original:", err.message);
         }
       }
 
       const temp = pickTemp(sample);
-      const output = await provider.generate(finalPrompt, { temperature: temp });
+      const response = await provider.generate(finalPrompt, { temperature: temp });
+      const normalized = normalizeLLMResponse(response, provider);
+      const output = normalized.content;
 
       // Track resource usage
       if (this.resourceMonitor && taskId && stepId) {
         this.resourceMonitor.recordPromptCall(
           taskId,
           stepId,
-          provider.model || provider.name || "unknown",
+          normalized.model || provider.model || provider.name || "unknown",
           finalPrompt,
-          output
+          output,
+          { usage: normalized.usage, projectId, role: "subtask" }
         );
       }
 
       const redFlags = this.redFlagger.evaluate(output, redFlagRules);
 
       const candidate = {
-        model: provider.model || provider.name || "unknown",
+        model: normalized.model || provider.model || provider.name || "unknown",
         output,
         redFlags,
         voteCount: 0,

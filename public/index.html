@@ -63,7 +63,7 @@
 <body class="bg-gray-950 text-gray-200 h-screen flex flex-col overflow-hidden font-sans">
 
     <!-- Top Navigation -->
-    <header class="bg-gray-900 border-b border-gray-800 h-14 flex items-center justify-between px-6 shrink-0">
+    <header class="bg-gray-900 border-b border-gray-800 h-20 flex items-center justify-between px-6 shrink-0">
         <div class="flex items-center gap-3">
             <div class="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center font-bold text-white cursor-pointer" onclick="app.showProjects()">U</div>
             <div class="flex items-center gap-2">
@@ -84,6 +84,9 @@
                 <div id="resource-details" class="space-y-0.5"></div>
                 <div id="resource-total" class="text-gray-500 border-t border-gray-800 pt-0.5 mt-0.5"></div>
             </div>
+            <button onclick="app.toggleTokenMonitor()" class="text-gray-400 hover:text-white transition-colors p-2 rounded-md hover:bg-gray-800" title="Toggle token usage">
+                $
+            </button>
             <button onclick="app.startDevServer()" class="text-gray-400 hover:text-white transition-colors p-2 rounded-md hover:bg-gray-800" title="Start dev server">
                 <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 3l14 9-14 9V3z"/></svg>
             </button>
@@ -156,12 +159,19 @@
             <div id="drag-features" class="w-1 h-full cursor-col-resize bg-gray-800/50"></div>
 
             <div id="col-subtasks" class="w-96 min-w-[240px] border-r border-gray-800 flex flex-col bg-gray-900/50">
-                <div class="p-3 border-b border-gray-800 flex justify-between items-center bg-gray-900">
-                    <div>
-                        <h3 id="dash-feature-name" class="font-bold truncate text-sm">Select a Feature</h3>
-                        <p id="dash-feature-desc" class="text-xs text-gray-500 truncate">Click on a feature to see subtasks</p>
+                <div class="p-3 border-b border-gray-800 bg-gray-900">
+                    <div class="flex justify-between items-start mb-2">
+                        <div class="flex-1 min-w-0">
+                            <h3 id="dash-feature-name" class="font-bold truncate text-sm">Select a Feature</h3>
+                            <p id="dash-feature-desc" class="text-xs text-gray-500 truncate">Click on a feature to see subtasks</p>
+                        </div>
+                        <span id="dash-feature-status" class="px-2 py-0.5 rounded text-[10px] bg-gray-800 text-gray-400 shrink-0">-</span>
                     </div>
-                    <span id="dash-feature-status" class="px-2 py-0.5 rounded text-[10px] bg-gray-800 text-gray-400">-</span>
+                    <!-- Human Testing Approval Button (hidden by default) -->
+                    <button id="btn-mark-completed" onclick="app.markFeatureCompleted()" class="hidden w-full mt-2 px-3 py-2 bg-green-600 hover:bg-green-500 text-white text-xs font-semibold rounded-md transition-colors flex items-center justify-center gap-2">
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
+                        Mark as Completed
+                    </button>
                 </div>
 
                 <div id="subtask-list" class="flex-1 overflow-y-auto p-3 space-y-2 font-mono text-xs">

@@ -8,6 +8,39 @@ function unwrapCodeFence(text) {
   return m ? m[1] : text;
 }
 
+function extractJsonObject(text) {
+  if (!text || typeof text !== "string") return null;
+  const start = text.indexOf("{");
+  if (start === -1) return null;
+  let inString = false;
+  let escape = false;
+  let depth = 0;
+  for (let i = start; i < text.length; i += 1) {
+    const ch = text[i];
+    if (inString) {
+      if (escape) {
+        escape = false;
+      } else if (ch === "\\") {
+        escape = true;
+      } else if (ch === '"') {
+        inString = false;
+      }
+    } else {
+      if (ch === '"') {
+        inString = true;
+      } else if (ch === "{") {
+        depth += 1;
+      } else if (ch === "}") {
+        depth -= 1;
+        if (depth === 0) {
+          return text.slice(start, i + 1);
+        }
+      }
+    }
+  }
+  return null;
+}
+
 /**
  * Simplified patch application (single file, no line numbers). Uses context + removed lines
  * to find and replace a unique block. Throws if the context is not found or no change results.
@@ -233,6 +266,10 @@ But patch is strongly preferred because it is safer and reviewable.
       outputInstruction = "Return the complete output for this step. Keep it focused and minimal.";
     }
 
+    const contextBlock = step.context
+      ? [`# Execution Context`, step.context, ``].join("\n")
+      : "";
+
     return [
       coreInstructions,
       ``,
@@ -246,6 +283,7 @@ But patch is strongly preferred because it is safer and reviewable.
       `# Available State`,
       stateSlice || "(empty)",
       ``,
+      contextBlock,
       outputInstruction,
     ].join("\n");
   }
@@ -289,6 +327,7 @@ But patch is strongly preferred because it is safer and reviewable.
         taskId: task.id,
         stepId: step.id,
         voteModel: providerName, // Pass vote model for paraphrasing
+        projectId: task.projectId,
       });
     } catch (err) {
       step.status = "failed";
@@ -506,10 +545,19 @@ But patch is strongly preferred because it is safer and reviewable.
     if (step.apply.type === "editFile") {
       if (!guard) throw new Error("ProjectGuard not configured");
       let instructions = null;
+      const rawOutput = unwrapCodeFence(output);
       try {
-        instructions = JSON.parse(unwrapCodeFence(output));
+        instructions = JSON.parse(rawOutput);
       } catch (err) {
-        throw new Error(`Failed to parse edit instructions JSON: ${err.message}`);
+        const extracted = extractJsonObject(rawOutput);
+        if (!extracted) {
+          throw new Error(`Failed to parse edit instructions JSON: ${err.message}`);
+        }
+        try {
+          instructions = JSON.parse(extracted);
+        } catch (innerErr) {
+          throw new Error(`Failed to parse edit instructions JSON: ${innerErr.message}`);
+        }
       }
       // Patch is preferred; fall back to search/replace.
       if (instructions.patch) {

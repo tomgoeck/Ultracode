@@ -72,6 +72,11 @@ class OpenAIProvider {
     }
     const json = await res.json();
     const content = json.choices?.[0]?.message?.content || "";
+    const usage = json.usage ? {
+      inputTokens: json.usage.prompt_tokens ?? null,
+      outputTokens: json.usage.completion_tokens ?? null,
+      totalTokens: json.usage.total_tokens ?? null,
+    } : null;
 
     // Debug logging
     if (!content) {
@@ -82,7 +87,12 @@ class OpenAIProvider {
       console.log(`[OpenAI ←] RESPONSE: ${content.length} chars | "${preview}..."`);
     }
 
-    return content;
+    return {
+      content,
+      usage,
+      model: json.model || this.model,
+      raw: json,
+    };
   }
 
   /**
@@ -137,6 +147,11 @@ class OpenAIProvider {
 
     const json = await res.json();
     const content = json.choices?.[0]?.message?.content || "";
+    const usage = json.usage ? {
+      inputTokens: json.usage.prompt_tokens ?? null,
+      outputTokens: json.usage.completion_tokens ?? null,
+      totalTokens: json.usage.total_tokens ?? null,
+    } : null;
 
     if (!content) {
       console.error("[OpenAI ✗] VISION RESPONSE: Empty!");
@@ -146,7 +161,12 @@ class OpenAIProvider {
       console.log(`[OpenAI ←] VISION RESPONSE: ${content.length} chars | "${preview}..."`);
     }
 
-    return content;
+    return {
+      content,
+      usage,
+      model: json.model || this.model,
+      raw: json,
+    };
   }
 
   async listModels() {

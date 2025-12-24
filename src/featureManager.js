@@ -239,6 +239,7 @@ class FeatureManager {
           plannerModel,
           fallbackModels: [executorModel, voteModel],
           configStore: this.configStore,
+          resourceMonitor: this.resourceMonitor,
           onProgress: (message) => {
             // Bubble up planner activity to UI/terminal
             this.broadcast({
@@ -301,6 +302,17 @@ class FeatureManager {
           const execModelKey = this._ensureProvider(project.executor_model || executorModel);
           const voteModelKey = this._ensureProvider(project.vote_model || project.executor_model || voteModel);
 
+          let stepContext = null;
+          try {
+            const execContext = await this.contextBuilder.buildExecutionContext(project, feature, subtask);
+            stepContext = this.contextBuilder.formatAsPrompt(execContext, "execution");
+          } catch (err) {
+            console.warn(`[FeatureManager] Failed to build execution context: ${err.message}`);
+          }
+
+          const applyType = subtask.apply_type || "writeFile";
+          const maxChars = applyType === "editFile" ? 12000 : 20000;
+
           // Build task object for orchestrator
           const task = {
             id: `task-${featureId}-${subtask.id}`,
@@ -317,8 +329,10 @@ class FeatureManager {
                 id: subtask.id,
                 intent: subtask.intent,
                 stateRefs: ["workspace"],
+                context: stepContext,
+                redFlags: [{ maxChars }],
                 apply: {
-                  type: subtask.apply_type || "writeFile",
+                  type: applyType,
                   path: subtask.apply_path,
                 },
               },
@@ -363,12 +377,20 @@ class FeatureManager {
       // Step 3: Automated tests disabled (temporary)
       // (Previously: run tests and add fix subtasks/retries on failure)
 
-      // Step 4: Update feature status
+      // Step 4: Update feature status based on priority
       if (finalStatus === "completed" || finalStatus === "verified") {
         // Generate technical summary
         const technicalSummary = this._generateTechnicalSummary(feature, subtasks, results);
+
+        // Priority A (Essential): Auto-complete after execution
+        // Priority B/C: Require human verification
+        let targetStatus = finalStatus;
+        if (feature.priority === 'B' || feature.priority === 'C') {
+          targetStatus = 'human_testing'; // Requires manual confirmation
+        }
+
         this.featureStore.updateFeature(featureId, {
-          status: finalStatus,
+          status: targetStatus,
           technicalSummary,
         });
 
@@ -383,12 +405,20 @@ class FeatureManager {
           }
         }
 
-        this.featureStore.recordEvent(project.id, featureId, null, "feature_completed", {
+        this.featureStore.recordEvent(project.id, featureId, null, targetStatus === 'human_testing' ? "feature_awaiting_test" : "feature_completed", {
           subtasksCompleted: results.filter((r) => !r.error).length,
           technicalSummary: technicalSummary?.substring(0, 200),
-          status: finalStatus,
+          status: targetStatus,
+          priority: feature.priority,
         });
-        this.broadcast({ type: "feature-completed", projectId: project.id, featureId, results, status: finalStatus });
+        this.broadcast({
+          type: targetStatus === 'human_testing' ? "feature-awaiting-test" : "feature-completed",
+          projectId: project.id,
+          featureId,
+          results,
+          status: targetStatus,
+          priority: feature.priority
+        });
       } else if (finalStatus === "paused") {
         this.featureStore.updateFeature(featureId, { status: "paused" });
         this.featureStore.recordEvent(project.id, featureId, null, "feature_paused", {});
@@ -673,6 +703,16 @@ async executeNextRunnable(projectId) {
       // Build task object for orchestrator
       const execModelKey = typeof executorModel === "string" ? executorModel : project.executor_model;
       const voteModelKey = typeof voteModel === "string" ? voteModel : (project.vote_model || project.executor_model);
+      const applyType = subtask.apply_type || "writeFile";
+      const maxChars = applyType === "editFile" ? 12000 : 20000;
+
+      let stepContext = null;
+      try {
+        const execContext = await this.contextBuilder.buildExecutionContext(project, feature, subtask);
+        stepContext = this.contextBuilder.formatAsPrompt(execContext, "execution");
+      } catch (err) {
+        console.warn(`[FeatureManager] Failed to build execution context: ${err.message}`);
+      }
 
       const task = {
         taskId: `retry-${subtaskId}`,
@@ -688,8 +728,10 @@ async executeNextRunnable(projectId) {
             id: subtask.id,
             intent: subtask.intent,
             stateRefs: ["workspace"],
+            context: stepContext,
+            redFlags: [{ maxChars }],
             apply: {
-              type: subtask.apply_type || "writeFile",
+              type: applyType,
               path: subtask.apply_path,
             },
           },
@@ -770,6 +812,44 @@ async executeNextRunnable(projectId) {
       },
       progress: subtasks.length > 0 ? Math.round((completed / subtasks.length) * 100) : 0,
     };
+  }
+
+  /**
+   * Mark a feature as completed (used for human-in-the-loop approval)
+   * @param {string} featureId
+   * @returns {Object} Updated feature
+   */
+  markAsCompleted(featureId) {
+    const feature = this.featureStore.getFeature(featureId);
+    if (!feature) {
+      throw new Error(`Feature not found: ${featureId}`);
+    }
+
+    // Only allow marking as completed if in human_testing status
+    if (feature.status !== 'human_testing') {
+      throw new Error(`Feature must be in 'human_testing' status to mark as completed (current: ${feature.status})`);
+    }
+
+    // Update to completed
+    this.featureStore.updateFeature(featureId, { status: 'completed' });
+
+    // Record event
+    const project = this.featureStore.getProject(feature.project_id);
+    if (project) {
+      this.featureStore.recordEvent(project.id, featureId, null, "feature_manually_completed", {
+        priority: feature.priority,
+        previousStatus: 'human_testing',
+      });
+
+      this.broadcast({
+        type: "feature-manually-completed",
+        projectId: project.id,
+        featureId,
+        status: 'completed'
+      });
+    }
+
+    return this.featureStore.getFeature(featureId);
   }
 }
 
