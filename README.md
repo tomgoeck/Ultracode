@@ -219,6 +219,28 @@ PORT=4173 npm start
 Open:
 http://localhost:4173
 
+---
+
+## 📸 Screenshots
+
+### Projects Dashboard
+![Projects Dashboard](screenshots/Gro%C3%9F%20%28CleanShot%202025-12-26%20at%2000.01.26@2x%29.jpeg)
+
+### Feature Details & Execution
+![Feature Details](screenshots/Gro%C3%9F%20%28CleanShot%202025-12-26%20at%2000.01.47@2x%29.jpeg)
+
+### Terminal Output
+![Terminal Output](screenshots/Gro%C3%9F%20%28CleanShot%202025-12-26%20at%2000.01.55@2x%29.jpeg)
+
+### Files Browser
+![Files Browser](screenshots/Gro%C3%9F%20%28CleanShot%202025-12-26%20at%2000.02.04@2x%29.jpeg)
+
+### Project Models Configuration
+![Project Models](screenshots/Gro%C3%9F%20%28CleanShot%202025-12-26%20at%2000.02.12@2x%29.jpeg)
+
+### API Keys Settings
+![API Keys](screenshots/Gro%C3%9F%20%28CleanShot%202025-12-26%20at%2000.02.31@2x%29.jpeg)
+
 ⸻
 
 🧪 Feature Lifecycle
