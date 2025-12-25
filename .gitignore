@@ -43,3 +43,20 @@ temp/
 # Build outputs
 dist/
 build/
+
+# Markdown files (except README.md)
+AGENTS.md
+CLAUDE.md
+CONTRIBUTING.md
+GEMINI.md
+IMPLEMENTATION_SUMMARY.md
+INIT_SYSTEM.md
+MAKER_COMPLIANCE_REPORT.md
+README2.md
+SECURITY.md
+TEMPLATE_SYSTEM.md
+TEST_SYSTEM_READY.md
+UI_PROJECT_TITLE.md
+docs/architecture.md
+.github/pull_request_template.md
+.github/ISSUE_TEMPLATE/
