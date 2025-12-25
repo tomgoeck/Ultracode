@@ -203,21 +203,25 @@ Outputs:
 git clone https://github.com/yourusername/Ultracode.git
 cd Ultracode
 npm install
+```
 
-Configure
+### Configure
 
+```bash
 cp config.json.example data/config.json
+```
 
-Add API keys (the data/ directory is gitignored).
+Add API keys (the `data/` directory is gitignored).
 
-Run
+### Run
 
+```bash
 npm start
 # or
 PORT=4173 npm start
+```
 
-Open:
-http://localhost:4173
+Open: http://localhost:4173
 
 ---
 
