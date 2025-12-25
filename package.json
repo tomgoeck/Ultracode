@@ -1,15 +1,37 @@
 {
   "name": "ultracode",
   "version": "2.0.0",
-  "description": "MAKER-style autonomous coding agent with feature pipeline system",
-  "main": "src/index.js",
+  "description": "Autonomous coding agent with feature-based development pipeline, multi-LLM support, and AI-powered project management",
+  "main": "src/server.js",
   "scripts": {
     "start": "node src/server.js",
-    "demo": "node src/index.js"
+    "demo": "node src/index.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
   },
-  "keywords": ["ai", "coding", "agent", "automation"],
-  "author": "",
+  "keywords": [
+    "ai",
+    "coding-agent",
+    "autonomous",
+    "llm",
+    "openai",
+    "claude",
+    "gemini",
+    "automation",
+    "feature-pipeline",
+    "maker",
+    "project-management",
+    "developer-tools"
+  ],
+  "author": "Ultracode Contributors",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/yourusername/ultracode.git"
+  },
+  "bugs": {
+    "url": "https://github.com/yourusername/ultracode/issues"
+  },
+  "homepage": "https://github.com/yourusername/ultracode#readme",
   "dependencies": {
     "puppeteer": "^22.0.0"
   },

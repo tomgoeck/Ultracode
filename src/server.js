@@ -72,7 +72,7 @@ const wizardAgent = new WizardAgent({
 });
 
 // Initialize ServerManager and TestRunner for automated testing
-const serverManager = new ServerManager();
+const serverManager = new ServerManager(featureStore);
 const testRunner = new TestRunner(llms);
 
 // Cleanup on exit
@@ -875,6 +875,9 @@ async function handleApi(req, res) {
             ok: result.success,
             error: result.success ? undefined : "Summary incomplete. See warnings.",
             warnings: result.warnings,
+            projectType: result.projectType,
+            initSh: result.initSh,
+            packageJson: result.packageJson,
             projectMd: result.projectMd,
             featuresJson: result.featuresJson,
             rawPreview: result.raw?.slice(0, 2000),
@@ -902,7 +905,7 @@ async function handleApi(req, res) {
 
       // Finalize wizard (Page 3: Model Selection)
       if (url.pathname === "/api/wizard/finalize" && req.method === "POST") {
-        const { projectId, plannerModel, executorModel, voteModel, summary, projectMd, featuresJson } = body;
+        const { projectId, plannerModel, executorModel, voteModel, summary, projectMd, featuresJson, projectType, initSh, packageJson } = body;
         if (!projectId) return sendJson(res, 400, { error: "projectId required" });
         if (!plannerModel || !executorModel) {
           return sendJson(res, 400, { error: "plannerModel and executorModel required" });
@@ -916,6 +919,9 @@ async function handleApi(req, res) {
             summary,
             projectMd,
             featuresJson,
+            projectType,
+            initSh,
+            packageJson,
           });
           const project = featureStore.getProject(projectId);
           return sendJson(res, 200, { ok: true, ...result, project });

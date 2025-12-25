@@ -89,6 +89,7 @@ class FeatureStore {
         planner_model TEXT,
         executor_model TEXT,
         vote_model TEXT,
+        project_type TEXT DEFAULT 'static-html',
         status TEXT DEFAULT 'created',
         bootstrapped INTEGER DEFAULT 0,
         created_at INTEGER,
@@ -184,6 +185,18 @@ class FeatureStore {
       CREATE INDEX IF NOT EXISTS idx_model_usage_role_project ON model_usage_by_role(project_id);
     `;
     this.run(ddl);
+
+    // Migration: Add project_type column if it doesn't exist
+    try {
+      const columns = this.all(`PRAGMA table_info(projects);`);
+      const hasProjectType = columns.some(col => col.name === 'project_type');
+      if (!hasProjectType) {
+        console.log('[FeatureStore] Running migration: Adding project_type column');
+        this.run(`ALTER TABLE projects ADD COLUMN project_type TEXT DEFAULT 'static-html';`);
+      }
+    } catch (err) {
+      console.warn('[FeatureStore] Migration failed (may be harmless):', err.message);
+    }
   }
 
   // ==================== PROJECTS ====================

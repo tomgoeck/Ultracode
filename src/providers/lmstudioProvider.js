@@ -1,4 +1,5 @@
 // LM Studio provider: OpenAI-compatible local endpoint, typically http://localhost:1234/v1
+const { logLLMRequest, logLLMResponse } = require("../llmLogger");
 class LMStudioProvider {
   /**
    * @param {{ model: string, baseUrl?: string }} opts
@@ -28,6 +29,13 @@ class LMStudioProvider {
       temperature: temp,
       max_tokens: maxTokens,
     };
+    logLLMRequest({
+      provider: "lmstudio",
+      model: this.model,
+      prompt,
+      options: { temperature: temp, maxTokens },
+      meta: { endpoint: "/chat/completions" },
+    });
     const chatRes = await fetch(`${this.baseUrl}/chat/completions`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -39,7 +47,17 @@ class LMStudioProvider {
     if (chatRes && chatRes.ok) {
       const json = await chatRes.json().catch(() => ({}));
       const text = json.choices?.[0]?.message?.content || json.choices?.[0]?.text;
-      if (typeof text === "string") return sanitizeOutput(text);
+      if (typeof text === "string") {
+        const cleaned = sanitizeOutput(text);
+        logLLMResponse({
+          provider: "lmstudio",
+          model: this.model,
+          content: cleaned,
+          raw: json,
+          meta: { endpoint: "/chat/completions" },
+        });
+        return cleaned;
+      }
       lastError = new Error("LM Studio chat returned empty response");
     } else if (chatRes) {
       const text = await chatRes.text();
@@ -53,6 +71,13 @@ class LMStudioProvider {
       temperature: temp,
       max_tokens: maxTokens,
     };
+    logLLMRequest({
+      provider: "lmstudio",
+      model: this.model,
+      prompt,
+      options: { temperature: temp, maxTokens },
+      meta: { endpoint: "/completions" },
+    });
     const completionRes = await fetch(`${this.baseUrl}/completions`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -64,7 +89,17 @@ class LMStudioProvider {
     if (completionRes && completionRes.ok) {
       const json = await completionRes.json().catch(() => ({}));
       const text = json.choices?.[0]?.text;
-      if (typeof text === "string") return sanitizeOutput(text);
+      if (typeof text === "string") {
+        const cleaned = sanitizeOutput(text);
+        logLLMResponse({
+          provider: "lmstudio",
+          model: this.model,
+          content: cleaned,
+          raw: json,
+          meta: { endpoint: "/completions" },
+        });
+        return cleaned;
+      }
       lastError = new Error("LM Studio completions returned empty response");
     } else if (completionRes) {
       const text = await completionRes.text();

@@ -170,7 +170,28 @@ Ask only what's necessary, but cover these areas when relevant:
   - **definition_of_done**: List of checks (automated or manual)
 
 ## Output Format for Finalization
-When the user says "Finalize", "Generate files", "Create summary", or confirms the plan, output exactly the following two blocks with no extra commentary:
+When the user says "Finalize", "Generate files", "Create summary", or confirms the plan, you MUST output ONLY the following blocks with ZERO extra text before or after:
+
+CRITICAL: Start your response immediately with ===PROJECT_TYPE=== (no greeting, no explanation).
+CRITICAL: End your response immediately after ===END_FEATURES_JSON=== (no closing remarks).
+CRITICAL: All 5 blocks are REQUIRED. Do not skip any block.
+
+===PROJECT_TYPE===
+[One of: react-vite, nextjs, express-api, php, static-html, react-express-fullstack, python-flask, python-django, vue-vite, svelte-vite, astro]
+===END_PROJECT_TYPE===
+
+===INIT_SH===
+#!/bin/bash
+[Complete bash script that installs ALL dependencies and sets up the project]
+[Must include: npm install (if Node), prisma generate (if Prisma), any build steps, database setup, etc.]
+[This script runs ONCE on first Play-button click]
+===END_INIT_SH===
+
+===PACKAGE_JSON===
+[Complete package.json with correct "dev" or "start" script for the dev server]
+[Only include this block if the project is a Node.js project]
+[Must have proper scripts: "dev": "vite" for React/Vite, "start": "node server.js" for Express, etc.]
+===END_PACKAGE_JSON===
 
 ===PROJECT_MD===
 [Full markdown content for project.md]
@@ -180,8 +201,156 @@ When the user says "Finalize", "Generate files", "Create summary", or confirms t
 [Valid JSON for features.json]
 ===END_FEATURES_JSON===
 
+## Project Type Guide
+Choose the correct project type based on the stack:
+- **react-vite**: React app with Vite bundler (most common React setup)
+- **nextjs**: Next.js app (React with SSR/SSG)
+- **express-api**: Node.js API with Express (no frontend)
+- **react-express-fullstack**: React frontend + Express backend (monorepo or separate folders)
+- **php**: PHP application (uses php -S for dev server)
+- **static-html**: Pure HTML/CSS/JS (no build step)
+- **vue-vite**: Vue.js app with Vite
+- **svelte-vite**: Svelte app with Vite
+- **astro**: Astro static site generator
+- **python-flask**: Python Flask API
+- **python-django**: Python Django app
+
+## init.sh Requirements
+The init.sh script MUST:
+1. Check if dependencies are already installed (idempotent)
+2. Install all npm/pip/composer dependencies
+3. Run database migrations if needed (Prisma, TypeORM, etc.)
+4. Generate code if needed (Prisma client, GraphQL types, etc.)
+5. Create necessary config files (.env templates)
+6. Be safe to run multiple times (check before installing)
+
+Example for React + Vite:
+\`\`\`bash
+#!/bin/bash
+set -e
+if [ ! -d "node_modules" ]; then
+  echo "Installing dependencies..."
+  npm install
+fi
+echo "Project ready!"
+\`\`\`
+
+Example for Express + Prisma:
+\`\`\`bash
+#!/bin/bash
+set -e
+if [ ! -d "node_modules" ]; then
+  npm install
+fi
+if [ -f "prisma/schema.prisma" ]; then
+  npx prisma generate
+  npx prisma migrate deploy
+fi
+echo "API ready!"
+\`\`\`
+
+## package.json Requirements
+The package.json MUST have the correct dev server script:
+- React/Vite: \`"dev": "vite"\`
+- Next.js: \`"dev": "next dev"\`
+- Express: \`"start": "node server.js"\` or \`"dev": "nodemon server.js"\`
+- Full-stack: \`"dev": "concurrently \\"npm run dev:client\\" \\"npm run dev:api\\"\"\`
+
+## Complete Example Output
+
+Here is a complete example for a React + Vite todo app:
+
+===PROJECT_TYPE===
+react-vite
+===END_PROJECT_TYPE===
+
+===INIT_SH===
+#!/bin/bash
+set -e
+
+if [ ! -d "node_modules" ]; then
+  echo "Installing dependencies..."
+  npm install
+fi
+
+echo "React app ready! Run 'npm run dev' to start."
+===END_INIT_SH===
+
+===PACKAGE_JSON===
+{
+  "name": "todo-app",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0"
+  },
+  "devDependencies": {
+    "@types/react": "^18.2.43",
+    "@types/react-dom": "^18.2.17",
+    "@vitejs/plugin-react": "^4.2.1",
+    "vite": "^5.0.8"
+  }
+}
+===END_PACKAGE_JSON===
+
+===PROJECT_MD===
+# Todo App
+
+A simple React-based todo list application.
+
+## Stack
+- React 18
+- Vite (build tool)
+- CSS Modules for styling
+
+## Features
+- Add/remove todos
+- Mark as complete
+- Filter by status
+
+## Development
+Run \`npm run dev\` to start the dev server.
+===END_PROJECT_MD===
+
+===FEATURES_JSON===
+{
+  "features": [
+    {
+      "id": "F001",
+      "name": "Project Scaffold",
+      "description": "Set up Vite + React project structure",
+      "priority": "A",
+      "depends_on": [],
+      "definition_of_done": [
+        {"type": "automated", "description": "npm run dev starts without errors"},
+        {"type": "manual", "description": "Browser shows default React page"}
+      ]
+    },
+    {
+      "id": "F002",
+      "name": "Todo List Component",
+      "description": "Display list of todos with add/remove functionality",
+      "priority": "A",
+      "depends_on": ["F001"],
+      "definition_of_done": [
+        {"type": "automated", "description": "Component renders without errors"},
+        {"type": "manual", "description": "Can add and remove todos in UI"}
+      ]
+    }
+  ]
+}
+===END_FEATURES_JSON===
+
 ## Tone
 Be helpful, practical, and direct. Default to simple, modern choices unless the user wants something else.`;
+
   }
 
   /**
@@ -436,7 +605,7 @@ Feel free to answer all at once or we can go through them one by one. I can also
       .map((m) => `${m.role}: ${m.content}`)
       .join("\n\n");
 
-    const prompt = `Based on this ENTIRE conversation about a project, extract ALL features that were discussed and generate project.md and a features JSON block.
+    const prompt = `Based on this ENTIRE conversation about a project, extract ALL features that were discussed and generate the full wizard output blocks.
 
 ${conversationText}
 
@@ -448,7 +617,23 @@ When building features.json:
 - Keep features coarse but outcome-focused (subtasks will add detail). Each feature must include a clear, measurable Definition of Done.
 - If the conversation mentions 6 features, output 6 features. If it mentions 10, output 10. Extract everything discussed.
 
-Output exactly the following two blocks with no extra commentary:
+Output exactly the following blocks with no extra commentary (start immediately with ===PROJECT_TYPE=== and end immediately after ===END_FEATURES_JSON===):
+
+===PROJECT_TYPE===
+[One of: react-vite, nextjs, express-api, php, static-html, react-express-fullstack, python-flask, python-django, vue-vite, svelte-vite, astro]
+===END_PROJECT_TYPE===
+
+===INIT_SH===
+#!/bin/bash
+[Complete bash script that installs ALL dependencies and sets up the project]
+[Must include: npm install (if Node), prisma generate (if Prisma), any build steps, database setup, etc.]
+[This script runs ONCE on first Play-button click]
+===END_INIT_SH===
+
+===PACKAGE_JSON===
+[Complete package.json with correct "dev" or "start" script for the dev server]
+[Only include this block if the project is a Node.js project]
+===END_PACKAGE_JSON===
 
 ===PROJECT_MD===
 # [Project Name]
@@ -548,6 +733,25 @@ src/
       });
     }
 
+    // Extract project_type block
+    const projectTypeMatch = normalized.content.match(/===PROJECT_TYPE===\s*([\s\S]*?)\s*===END_PROJECT_TYPE===/);
+    const projectType = projectTypeMatch ? projectTypeMatch[1].trim() : 'static-html';
+
+    // Extract init.sh block
+    const initShMatch = normalized.content.match(/===INIT_SH===\s*([\s\S]*?)\s*===END_INIT_SH===/);
+    const initShContent = initShMatch ? initShMatch[1].trim() : null;
+
+    // Extract package.json block
+    const packageJsonMatch = normalized.content.match(/===PACKAGE_JSON===\s*([\s\S]*?)\s*===END_PACKAGE_JSON===/);
+    let packageJsonContent = null;
+    if (packageJsonMatch) {
+      try {
+        packageJsonContent = JSON.parse(packageJsonMatch[1].trim());
+      } catch (e) {
+        console.warn("[WizardAgent] Failed to parse package.json:", e.message);
+      }
+    }
+
     // Extract project.md block
     const projectMdMatch = normalized.content.match(/===PROJECT_MD===\s*([\s\S]*?)\s*===END_PROJECT_MD===/);
     const projectMdContent = projectMdMatch ? projectMdMatch[1].trim() : null;
@@ -556,6 +760,13 @@ src/
     const featuresJsonMatch = normalized.content.match(/===FEATURES_JSON===\s*([\s\S]*?)\s*===END_FEATURES_JSON===/);
     let featuresJsonContent = null;
     const warnings = [];
+
+    if (!projectTypeMatch) {
+      warnings.push("Missing PROJECT_TYPE block, defaulting to 'static-html'");
+    }
+    if (!initShMatch) {
+      warnings.push("Missing INIT_SH block in model response");
+    }
     if (!projectMdMatch) {
       warnings.push("Missing PROJECT_MD block in model response");
     }
@@ -572,6 +783,15 @@ src/
     }
 
     // Store in wizard state
+    if (projectType) {
+      wizard.projectType = projectType;
+    }
+    if (initShContent) {
+      wizard.initSh = initShContent;
+    }
+    if (packageJsonContent) {
+      wizard.packageJson = packageJsonContent;
+    }
     if (projectMdContent) {
       wizard.projectMd = projectMdContent;
     }
@@ -587,12 +807,15 @@ src/
       }));
     }
 
-    const success = !!(projectMdContent && featuresJsonContent);
+    const success = !!(projectMdContent && featuresJsonContent && projectType);
     if (!success) {
-      warnings.push("Summary incomplete; project.md or features.json missing/invalid.");
+      warnings.push("Summary incomplete; required blocks missing/invalid.");
     }
 
     return {
+      projectType,
+      initSh: initShContent,
+      packageJson: packageJsonContent,
       projectMd: projectMdContent,
       featuresJson: featuresJsonContent,
       raw: normalized.content,
@@ -668,13 +891,16 @@ src/
    * @param {Object} models
    * @returns {Promise<Object>}
    */
-  async finalizeWizard(projectId, { plannerModel, executorModel, voteModel, summary, projectMd: providedProjectMd, featuresJson: providedFeaturesJson }) {
+  async finalizeWizard(projectId, { plannerModel, executorModel, voteModel, summary, projectMd: providedProjectMd, featuresJson: providedFeaturesJson, projectType: providedProjectType, initSh: providedInitSh, packageJson: providedPackageJson }) {
     let wizard = this.activeWizards.get(projectId);
     if (!wizard) {
       // Fallback: reconstruct minimal wizard state from provided data
       wizard = {
         projectMd: providedProjectMd || null,
         featuresJson: providedFeaturesJson || null,
+        projectType: providedProjectType || 'static-html',
+        initSh: providedInitSh || null,
+        packageJson: providedPackageJson || null,
         extractedFeatures: [],
         projectSummary: summary || null,
       };
@@ -690,6 +916,11 @@ src/
       }
       // Cache for subsequent calls
       this.activeWizards.set(projectId, wizard);
+    } else {
+      // If wizard exists, update with provided data (in case user went back and regenerated summary)
+      if (providedProjectType) wizard.projectType = providedProjectType;
+      if (providedInitSh) wizard.initSh = providedInitSh;
+      if (providedPackageJson) wizard.packageJson = providedPackageJson;
     }
 
     const project = this.featureStore.getProject(projectId);
@@ -697,11 +928,12 @@ src/
       throw new Error(`Project not found: ${projectId}`);
     }
 
-    // Update project with model selection
+    // Update project with model selection and project type
     this.featureStore.updateProject(projectId, {
       plannerModel,
       executorModel,
       voteModel,
+      project_type: wizard.projectType || 'static-html',
       status: "active",
     });
 
@@ -719,20 +951,27 @@ src/
       }));
     }
 
-    // Use extracted content if available, otherwise generate fallback
-    // Use extracted project.md if available, otherwise generate fallback
+    // Write project.md
     const projectMdContent = wizard.projectMd || this.generateProjectMd(project.name, wizard.projectSummary);
     const projectMdPath = path.join(folderPath, "project.md");
     fs.writeFileSync(projectMdPath, projectMdContent);
+    console.log(`[WizardAgent] Created project.md at ${projectMdPath}`);
 
-    // Generate init.sh script for project initialization
-    const { createInitScript } = require('./initScriptGenerator');
-    try {
-      const initScriptPath = createInitScript(folderPath);
-      console.log(`[WizardAgent] Created init.sh at ${initScriptPath}`);
-    } catch (err) {
-      console.warn(`[WizardAgent] Failed to create init.sh:`, err.message);
-      // Non-fatal - continue without init.sh
+    // Write init.sh if extracted from LLM
+    if (wizard.initSh) {
+      const initShPath = path.join(folderPath, "init.sh");
+      fs.writeFileSync(initShPath, wizard.initSh);
+      fs.chmodSync(initShPath, '755'); // Make executable
+      console.log(`[WizardAgent] Created init.sh at ${initShPath}`);
+    } else {
+      console.warn(`[WizardAgent] No init.sh extracted from LLM response`);
+    }
+
+    // Write package.json if extracted from LLM (for Node.js projects)
+    if (wizard.packageJson) {
+      const packageJsonPath = path.join(folderPath, "package.json");
+      fs.writeFileSync(packageJsonPath, JSON.stringify(wizard.packageJson, null, 2));
+      console.log(`[WizardAgent] Created package.json at ${packageJsonPath}`);
     }
 
     // If still no features, fail fast

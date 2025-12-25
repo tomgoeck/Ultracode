@@ -1,4 +1,5 @@
 // Anthropic Claude provider: messages + model listing.
+const { logLLMRequest, logLLMResponse } = require("../llmLogger");
 class ClaudeProvider {
   /**
    * @param {{ apiKey: string, model: string, baseUrl?: string }} opts
@@ -12,12 +13,21 @@ class ClaudeProvider {
 
   async generate(prompt, options = {}) {
     if (!this.apiKey) throw new Error("Anthropic API key missing");
+    const maxTokens = options.maxTokens ?? 512;
+    const temperature = options.temperature ?? 0.2;
     const body = {
       model: this.model,
-      max_tokens: options.maxTokens ?? 512,
-      temperature: options.temperature ?? 0.2,
+      max_tokens: maxTokens,
+      temperature,
       messages: [{ role: "user", content: prompt }],
     };
+    logLLMRequest({
+      provider: "claude",
+      model: this.model,
+      prompt,
+      options: { maxTokens, temperature },
+      meta: { endpoint: "/v1/messages" },
+    });
     const res = await fetch(`${this.baseUrl}/v1/messages`, {
       method: "POST",
       headers: {
@@ -38,6 +48,14 @@ class ClaudeProvider {
       outputTokens: json.usage.output_tokens ?? null,
       totalTokens: json.usage.total_tokens ?? null,
     } : null;
+    logLLMResponse({
+      provider: "claude",
+      model: json.model || this.model,
+      content,
+      usage,
+      raw: json,
+      meta: { endpoint: "/v1/messages" },
+    });
     return {
       content,
       usage,

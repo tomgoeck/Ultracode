@@ -1,0 +1,43 @@
+{
+  "providers": [
+    {
+      "name": "GPT-4o-mini",
+      "type": "openai",
+      "apiKey": "your-openai-api-key-here",
+      "model": "gpt-4o-mini"
+    },
+    {
+      "name": "GPT-4o",
+      "type": "openai",
+      "apiKey": "your-openai-api-key-here",
+      "model": "gpt-4o"
+    },
+    {
+      "name": "Claude Sonnet",
+      "type": "anthropic",
+      "apiKey": "your-anthropic-api-key-here",
+      "model": "claude-sonnet-4-5-20250929"
+    },
+    {
+      "name": "Gemini Pro",
+      "type": "gemini",
+      "apiKey": "your-gemini-api-key-here",
+      "model": "gemini-pro"
+    },
+    {
+      "name": "Local LM Studio",
+      "type": "lmstudio",
+      "model": "your-model-name",
+      "baseUrl": "http://localhost:1234"
+    }
+  ],
+  "settings": {
+    "safetyMode": "auto"
+  },
+  "keys": {
+    "openai": "your-openai-api-key-here",
+    "anthropic": "your-anthropic-api-key-here",
+    "gemini": "your-gemini-api-key-here",
+    "tavily": "your-tavily-api-key-here"
+  }
+}

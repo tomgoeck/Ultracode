@@ -1,4 +1,5 @@
 // OpenAI provider: chat completions + model listing.
+const { logLLMRequest, logLLMResponse } = require("../llmLogger");
 class OpenAIProvider {
   /**
    * @param {{ apiKey: string, model: string, baseUrl?: string }} opts
@@ -30,8 +31,6 @@ class OpenAIProvider {
       messages: [{ role: "user", content: prompt }],
     };
 
-    console.log(`[OpenAI →] REQUEST: ${this.model} | prompt: ${prompt.substring(0, 80)}...`);
-
     if (fixedTemperature) {
         // Models with fixed temperature=1 (reasoning models, gpt-4.1, gpt-5)
         if (options.maxTokens && usesCompletionTokens) {
@@ -58,6 +57,18 @@ class OpenAIProvider {
         }
     }
 
+    const logOptions = {
+      temperature: body.temperature,
+      maxTokens: body.max_tokens ?? body.max_completion_tokens,
+    };
+    logLLMRequest({
+      provider: "openai",
+      model: this.model,
+      prompt,
+      options: logOptions,
+      meta: { endpoint: "/chat/completions" },
+    });
+
     const res = await fetch(`${this.baseUrl}/chat/completions`, {
       method: "POST",
       headers: {
@@ -78,14 +89,14 @@ class OpenAIProvider {
       totalTokens: json.usage.total_tokens ?? null,
     } : null;
 
-    // Debug logging
-    if (!content) {
-      console.error("[OpenAI ✗] RESPONSE: Empty!");
-      console.error("[OpenAI] Full response:", JSON.stringify(json, null, 2));
-    } else {
-      const preview = content.substring(0, 100).replace(/\n/g, ' ');
-      console.log(`[OpenAI ←] RESPONSE: ${content.length} chars | "${preview}..."`);
-    }
+    logLLMResponse({
+      provider: "openai",
+      model: json.model || this.model,
+      content,
+      usage,
+      raw: json,
+      meta: { endpoint: "/chat/completions" },
+    });
 
     return {
       content,
@@ -129,7 +140,13 @@ class OpenAIProvider {
       body.temperature = options.temperature;
     }
 
-    console.log(`[OpenAI →] VISION REQUEST: ${this.model} | prompt: ${prompt.substring(0, 80)}...`);
+    logLLMRequest({
+      provider: "openai",
+      model: this.model,
+      prompt,
+      options: { maxTokens: options.maxTokens ?? 1000, temperature: options.temperature },
+      meta: { endpoint: "/chat/completions", note: `imageBytes=${base64Image.length}` },
+    });
 
     const res = await fetch(`${this.baseUrl}/chat/completions`, {
       method: "POST",
@@ -153,13 +170,14 @@ class OpenAIProvider {
       totalTokens: json.usage.total_tokens ?? null,
     } : null;
 
-    if (!content) {
-      console.error("[OpenAI ✗] VISION RESPONSE: Empty!");
-      console.error("[OpenAI] Full response:", JSON.stringify(json, null, 2));
-    } else {
-      const preview = content.substring(0, 100).replace(/\n/g, " ");
-      console.log(`[OpenAI ←] VISION RESPONSE: ${content.length} chars | "${preview}..."`);
-    }
+    logLLMResponse({
+      provider: "openai",
+      model: json.model || this.model,
+      content,
+      usage,
+      raw: json,
+      meta: { endpoint: "/chat/completions", note: "vision" },
+    });
 
     return {
       content,

@@ -1,4 +1,5 @@
 // Google Gemini provider: generateContent + model listing.
+const { logLLMRequest, logLLMResponse } = require("../llmLogger");
 class GeminiProvider {
   /**
    * @param {{ apiKey: string, model: string, baseUrl?: string }} opts
@@ -12,13 +13,22 @@ class GeminiProvider {
 
   async generate(prompt, options = {}) {
     if (!this.apiKey) throw new Error("Gemini API key missing");
+    const temperature = options.temperature ?? 0.2;
+    const maxTokens = options.maxTokens ?? 512;
     const body = {
       contents: [{ parts: [{ text: prompt }], role: "user" }],
       generationConfig: {
-        temperature: options.temperature ?? 0.2,
-        maxOutputTokens: options.maxTokens ?? 512,
+        temperature,
+        maxOutputTokens: maxTokens,
       },
     };
+    logLLMRequest({
+      provider: "gemini",
+      model: this.model,
+      prompt,
+      options: { maxTokens, temperature },
+      meta: { endpoint: `/v1beta/models/${this.model}:generateContent` },
+    });
     const res = await fetch(
       `${this.baseUrl}/v1beta/models/${this.model}:generateContent?key=${this.apiKey}`,
       {
@@ -39,6 +49,14 @@ class GeminiProvider {
       outputTokens: json.usageMetadata.candidatesTokenCount ?? null,
       totalTokens: json.usageMetadata.totalTokenCount ?? null,
     } : null;
+    logLLMResponse({
+      provider: "gemini",
+      model: json.model || this.model,
+      content,
+      usage,
+      raw: json,
+      meta: { endpoint: `/v1beta/models/${this.model}:generateContent` },
+    });
     return {
       content,
       usage,

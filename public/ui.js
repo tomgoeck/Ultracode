@@ -22,6 +22,14 @@ const app = {
         }
     },
 
+    setDefaultModel(select, value) {
+        if (!select || !value) return false;
+        const option = Array.from(select.options).find(opt => opt.value === value);
+        if (!option) return false;
+        select.value = value;
+        return true;
+    },
+
     initSortableFeatures() {
         const list = document.getElementById('feature-list');
         if (!list) return;
@@ -236,9 +244,22 @@ const app = {
             const data = await res.json();
             const proj = data.project;
             if (!proj) return;
-            document.getElementById('model-planner').value = proj.planner_model || '';
-            document.getElementById('model-executor').value = proj.executor_model || '';
-            document.getElementById('model-vote').value = proj.vote_model || '';
+            const plannerSelect = document.getElementById('model-planner');
+            const executorSelect = document.getElementById('model-executor');
+            const voterSelect = document.getElementById('model-vote');
+            plannerSelect.value = proj.planner_model || '';
+            executorSelect.value = proj.executor_model || '';
+            voterSelect.value = proj.vote_model || '';
+
+            if (!plannerSelect.value) {
+                this.setDefaultModel(plannerSelect, 'openai:gpt-5.2');
+            }
+            if (!executorSelect.value) {
+                this.setDefaultModel(executorSelect, 'openai:gpt-4o-mini');
+            }
+            if (!voterSelect.value) {
+                this.setDefaultModel(voterSelect, 'openai:gpt-4o-mini');
+            }
         } catch (e) {
             console.error('Failed to prefill models', e);
         }
@@ -385,10 +406,22 @@ const app = {
         voterSelect.innerHTML = '<option value="">Same as Agent</option>' + html;
         planningSelect.innerHTML = '<option value="">Same as Agent</option>' + html;
         
-        // Restore selection if valid, else select first
-        if (currentAgent) agentSelect.value = currentAgent;
-        if (currentVoter) voterSelect.value = currentVoter;
-        if (currentPlanning) planningSelect.value = currentPlanning;
+        // Restore selection if valid, else set defaults
+        if (currentAgent && this.setDefaultModel(agentSelect, currentAgent)) {
+            // keep current
+        } else {
+            this.setDefaultModel(agentSelect, 'openai:gpt-4o-mini');
+        }
+        if (currentVoter && this.setDefaultModel(voterSelect, currentVoter)) {
+            // keep current
+        } else {
+            this.setDefaultModel(voterSelect, 'openai:gpt-4o-mini');
+        }
+        if (currentPlanning && this.setDefaultModel(planningSelect, currentPlanning)) {
+            // keep current
+        } else {
+            this.setDefaultModel(planningSelect, 'openai:gpt-5.2');
+        }
     },
 
     showCreateProjectModal(show = true) {
@@ -2332,6 +2365,9 @@ const app = {
             this.state.wizard.summary = summary;
             this.state.wizard.projectMd = data.projectMd;
             this.state.wizard.featuresJson = data.featuresJson;
+            this.state.wizard.projectType = data.projectType;
+            this.state.wizard.initSh = data.initSh;
+            this.state.wizard.packageJson = data.packageJson;
 
             // Enable finalize now that summary exists
             document.getElementById('btn-wizard-create')?.removeAttribute('disabled');
@@ -2403,6 +2439,11 @@ const app = {
         const executorSelect = document.getElementById('wizard-executor-model');
         const voterSelect = document.getElementById('wizard-voter-model');
 
+        const currentChat = chatSelect.value;
+        const currentPlanner = plannerSelect.value;
+        const currentExecutor = executorSelect.value;
+        const currentVoter = voterSelect.value;
+
         chatSelect.innerHTML = '<option>Loading models...</option>';
         plannerSelect.innerHTML = '<option>Loading models...</option>';
         executorSelect.innerHTML = '<option>Loading...</option>';
@@ -2465,11 +2506,30 @@ const app = {
         executorSelect.innerHTML = html;
         voterSelect.innerHTML = '<option value="">Same as Executor</option>' + html;
 
-        // Set default chat model to gpt-4o-mini if available
+        // Restore or set default chat model to gpt-4o-mini if available
         const chatOptions = Array.from(chatSelect.options);
         const gpt4oMini = chatOptions.find(opt => opt.value.includes('gpt-4o-mini'));
-        if (gpt4oMini) {
+        if (currentChat && this.setDefaultModel(chatSelect, currentChat)) {
+            // keep current
+        } else if (gpt4oMini) {
             chatSelect.value = gpt4oMini.value;
+        }
+
+        // Restore or set default planner/executor/voter models
+        if (currentPlanner && this.setDefaultModel(plannerSelect, currentPlanner)) {
+            // keep current
+        } else {
+            this.setDefaultModel(plannerSelect, 'openai:gpt-5.2');
+        }
+        if (currentExecutor && this.setDefaultModel(executorSelect, currentExecutor)) {
+            // keep current
+        } else {
+            this.setDefaultModel(executorSelect, 'openai:gpt-4o-mini');
+        }
+        if (currentVoter && this.setDefaultModel(voterSelect, currentVoter)) {
+            // keep current
+        } else {
+            this.setDefaultModel(voterSelect, 'openai:gpt-4o-mini');
         }
     },
 
@@ -2511,6 +2571,9 @@ const app = {
                     summary: this.state.wizard.summary,
                     projectMd: this.state.wizard.projectMd,
                     featuresJson: this.state.wizard.featuresJson,
+                    projectType: this.state.wizard.projectType,
+                    initSh: this.state.wizard.initSh,
+                    packageJson: this.state.wizard.packageJson,
                     plannerModel,
                     executorModel,
                     voteModel: voterModel || executorModel

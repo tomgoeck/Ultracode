@@ -6,8 +6,9 @@ const fs = require('fs');
 const path = require('path');
 
 class ServerManager {
-  constructor() {
+  constructor(featureStore = null) {
     this.runningServers = new Map(); // projectId -> { process, port, url }
+    this.featureStore = featureStore; // Optional: for reading project_type from DB
   }
 
   /**
@@ -27,7 +28,25 @@ class ServerManager {
     // Check and run init.sh if it exists and hasn't been run yet
     await this._runInitScriptIfNeeded(projectPath, projectId);
 
-    const serverType = this._detectServerType(projectPath);
+    // Try to get project_type from database first
+    let serverType = null;
+    if (this.featureStore && projectId) {
+      try {
+        const project = this.featureStore.getProject(projectId);
+        if (project && project.project_type) {
+          serverType = this._mapProjectTypeToServerType(project.project_type);
+          console.log(`[ServerManager] Using project_type from DB: ${project.project_type} -> ${serverType}`);
+        }
+      } catch (err) {
+        console.warn(`[ServerManager] Failed to read project_type from DB:`, err.message);
+      }
+    }
+
+    // Fallback to auto-detection if no project_type in DB
+    if (!serverType) {
+      serverType = this._detectServerType(projectPath);
+      console.log(`[ServerManager] Auto-detected server type: ${serverType}`);
+    }
     // Start on a high, likely-free port (fallback to random if unavailable)
     const port = await this._findAvailablePort(42000);
 
@@ -117,7 +136,37 @@ class ServerManager {
   // ===== PRIVATE METHODS =====
 
   /**
-   * Detect what type of server to start
+   * Map project_type from database to internal server type
+   * @param {string} projectType - From database (e.g., 'react-vite', 'nextjs', 'php', etc.)
+   * @returns {string} - Internal server type ('node', 'php', 'static', 'python')
+   */
+  _mapProjectTypeToServerType(projectType) {
+    const mapping = {
+      // Node.js based projects
+      'react-vite': 'node',
+      'vue-vite': 'node',
+      'svelte-vite': 'node',
+      'nextjs': 'node',
+      'astro': 'node',
+      'express-api': 'node',
+      'react-express-fullstack': 'node',
+
+      // PHP projects
+      'php': 'php',
+
+      // Python projects
+      'python-flask': 'python',
+      'python-django': 'python',
+
+      // Static projects
+      'static-html': 'static',
+    };
+
+    return mapping[projectType] || 'static'; // Default to static if unknown
+  }
+
+  /**
+   * Detect what type of server to start (fallback when no project_type in DB)
    */
   _detectServerType(projectPath) {
     // Check for Node.js project
@@ -132,6 +181,11 @@ class ServerManager {
     const files = fs.readdirSync(projectPath);
     if (files.some(f => f.endsWith('.php'))) {
       return 'php';
+    }
+
+    // Check for Python
+    if (files.some(f => f === 'requirements.txt' || f === 'manage.py')) {
+      return 'python';
     }
 
     // Check for static HTML
@@ -155,10 +209,14 @@ class ServerManager {
       return; // No init script, nothing to do
     }
 
-    // Check if already initialized
-    if (fs.existsSync(initDoneMarker)) {
-      console.log(`[ServerManager] Project ${projectId} already initialized`);
-      return;
+    const alreadyInitialized = fs.existsSync(initDoneMarker);
+    if (alreadyInitialized) {
+      const needsInit = this._needsDependencyInstall(projectPath);
+      if (!needsInit) {
+        console.log(`[ServerManager] Project ${projectId} already initialized`);
+        return;
+      }
+      console.log(`[ServerManager] Dependencies missing; re-running init for ${projectId}`);
     }
 
     console.log(`[ServerManager] Running initialization script for ${projectId}...`);
@@ -213,6 +271,50 @@ class ServerManager {
     });
 
     return proc;
+  }
+
+  _needsDependencyInstall(projectPath) {
+    const candidates = this._getNodeInstallDirs(projectPath);
+    for (const dir of candidates) {
+      const pkgPath = path.join(dir, 'package.json');
+      if (!fs.existsSync(pkgPath)) continue;
+      try {
+        const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
+        const hasDeps = pkg && (pkg.dependencies || pkg.devDependencies);
+        if (!hasDeps) continue;
+      } catch {
+        continue;
+      }
+      if (!fs.existsSync(path.join(dir, 'node_modules'))) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  _getNodeInstallDirs(projectPath) {
+    const dirs = new Set();
+    const rootPkgPath = path.join(projectPath, 'package.json');
+    if (!fs.existsSync(rootPkgPath)) return [];
+
+    dirs.add(projectPath);
+
+    try {
+      const pkg = JSON.parse(fs.readFileSync(rootPkgPath, 'utf8'));
+      const scripts = pkg?.scripts || {};
+      for (const script of Object.values(scripts)) {
+        if (typeof script !== 'string') continue;
+        const match = script.match(/--prefix\s+([^\s]+)/);
+        if (!match) continue;
+        const target = match[1].replace(/^["']|["']$/g, '');
+        const resolved = path.resolve(projectPath, target);
+        dirs.add(resolved);
+      }
+    } catch {
+      return Array.from(dirs);
+    }
+
+    return Array.from(dirs);
   }
 
   /**
