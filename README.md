@@ -237,7 +237,7 @@ Outputs:
 ### Install
 
 ```bash
-git clone https://github.com/yourusername/Ultracode.git
+git clone https://github.com/tomgoeck/Ultracode.git
 cd Ultracode
 npm install
 ```
