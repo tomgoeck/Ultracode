@@ -11,6 +11,43 @@ It is an **engineering system**.
 
 ---
 
+## ⚠️ Status: Alpha Testing
+
+**Ultracode is actively being developed and tested.** While core functionality works reliably, some features may change. Use in production at your own discretion.
+
+---
+
+## 🎯 Why Ultracode?
+
+### ✅ Easy-to-Use Interface
+Intuitive UI with project management, feature tracking, and real-time execution monitoring. See [screenshots](#-screenshots) below.
+
+### 🧠 Multi-Agent Architecture for Reliability
+Based on **MAKER** (Cognizant AI Lab), Ultracode eliminates the "hallucination problem" that plagues modern LLMs:
+- **Separation of concerns**: Planning, execution, and voting are independent
+- **Error decorrelation**: Multiple agents generate diverse solutions
+- **Structured voting**: Consensus replaces blind generation
+- **Near-zero failure rates** on long-running projects
+
+### 💰 Cost-Effective & Flexible
+- **Use expensive models only for planning** (Example: gpt-5.2 or opus-4.5)
+- **Cheaper models for coding**: GPT-4o Mini, Gemini 2, or your local models
+- **Local model support**: Run open models via LM Studio (GLM, Mistral, etc.) — **zero API costs**
+- **Full cost transparency**: Real-time token breakdown per project
+
+### 🔒 Reliable & Auditable
+- Every decision is logged (event sourcing)
+- Human-in-the-loop for risky operations
+- Filesystem sandbox prevents accidental damage
+- Git commits with full feature history
+
+### 🚀 Feature-Based Development
+- Organize work as **features** with dependencies
+- Automatic task decomposition and prioritization
+- Resume paused work without losing context
+
+---
+
 ## 🔬 Research Background
 
 Ultracode is directly inspired by:
