@@ -1957,63 +1957,10 @@ const app = {
         // Show page 1
         this.wizardShowPage(1);
 
-        // Load templates and models
-        this.wizardLoadTemplates();
+        // Load models (templates removed)
         this.wizardLoadModels();
     },
 
-    async wizardLoadTemplates() {
-        try {
-            const res = await fetch('/api/templates');
-            const data = await res.json();
-
-            if (data.templates && data.templates.length > 0) {
-                const templateList = document.getElementById('template-list');
-
-                // Add click handler to "Start from Scratch" card
-                const scratchCard = templateList.querySelector('[data-template-id=""]');
-                if (scratchCard) {
-                    scratchCard.onclick = () => this.selectTemplate(null);
-                }
-
-                // Generate template cards
-                data.templates.forEach(template => {
-                    const card = document.createElement('div');
-                    card.className = 'template-card border-2 border-gray-700 bg-gray-800 p-3 rounded-lg cursor-pointer hover:border-blue-400 transition-colors';
-                    card.dataset.templateId = template.id;
-                    card.innerHTML = `
-                        <div class="flex items-center gap-2 mb-1">
-                            <span class="text-lg">${template.icon}</span>
-                            <span class="font-medium text-sm">${this.escapeHtml(template.name)}</span>
-                        </div>
-                        <p class="text-xs text-gray-500">${this.escapeHtml(template.description)}</p>
-                    `;
-                    card.onclick = () => this.selectTemplate(template.id);
-                    templateList.appendChild(card);
-                });
-            }
-        } catch (err) {
-            console.error('Failed to load templates:', err);
-        }
-    },
-
-    selectTemplate(templateId) {
-        // Update state (null or empty string = no template)
-        this.state.wizard.selectedTemplateId = templateId || null;
-
-        // Update UI - remove selection from all cards
-        const normalizedId = templateId || '';
-        document.querySelectorAll('.template-card').forEach(card => {
-            const cardId = card.dataset.templateId || '';
-            if (cardId === normalizedId) {
-                card.classList.remove('border-gray-700');
-                card.classList.add('border-blue-500');
-            } else {
-                card.classList.remove('border-blue-500');
-                card.classList.add('border-gray-700');
-            }
-        });
-    },
 
     cancelWizard() {
         const modal = document.getElementById('modal-wizard');

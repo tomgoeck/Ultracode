@@ -687,21 +687,6 @@ async function handleApi(req, res) {
 
       // ==================== WIZARD ENDPOINTS ====================
 
-      // Get available templates
-      if (url.pathname === "/api/templates" && req.method === "GET") {
-        const templates = getAllTemplates();
-        return sendJson(res, 200, { templates });
-      }
-
-      // Get specific template
-      if (url.pathname.match(/^\/api\/templates\/[^/]+$/) && req.method === "GET") {
-        const templateId = url.pathname.split("/")[3];
-        const template = getTemplate(templateId);
-        if (!template) {
-          return sendJson(res, 404, { error: "Template not found" });
-        }
-        return sendJson(res, 200, { template });
-      }
 
       // Start wizard (Page 1: Basics)
       if (url.pathname === "/api/wizard/start" && req.method === "POST") {
@@ -717,13 +702,6 @@ async function handleApi(req, res) {
           basePath: projectsBasePath,
         });
 
-        // If template selected, initialize wizard with template
-        if (templateId) {
-          const template = getTemplate(templateId);
-          if (template) {
-            wizardAgent.initializeFromTemplate(result.projectId, template);
-          }
-        }
 
         return sendJson(res, 200, {
           ok: true,
