@@ -1,25 +1,25 @@
-# ⚡ Ultraagent
+# ⚡ Ultracode
 
 **A MAKER-based autonomous feature engineering system**
 
-Ultraagent is a **production-grade autonomous software engineering system** that plans, implements, validates, and commits complete software features using a structured multi-agent architecture.
+Ultracode is a **production-grade autonomous software engineering system** that plans, implements, validates, and commits complete software features using a structured multi-agent architecture.
 
-Ultraagent is inspired by the **MAKER architecture** and implements a **general-purpose agent harness** for reliable, auditable, and cost-aware AI-driven development.
+Ultracode is inspired by the **MAKER architecture** and implements a **general-purpose agent harness** for reliable, auditable, and cost-aware AI-driven development.
 
-Ultraagent is **not a chatbot**.  
+Ultracode is **not a chatbot**.  
 It is an **engineering system**.
 
 ---
 
 ## 🔬 Research Background
 
-Ultraagent is directly inspired by:
+Ultracode is directly inspired by:
 
 > **MAKER: Multi-Agent Architecture for Knowledge-Driven Reasoning**  
 > Cognizant AI Lab (2024)  
 > https://www.cognizant.com/us/en/ai-lab/blog/maker
 
-From the MAKER paper, Ultraagent adopts:
+From the MAKER paper, Ultracode adopts:
 
 - Separation of **planning**, **execution**, and **validation**
 - Explicit intermediate representations
@@ -27,13 +27,13 @@ From the MAKER paper, Ultraagent adopts:
 - Structured voting instead of blind generation
 - Human-in-the-loop safety boundaries
 
-Ultraagent extends MAKER from **task execution** to a complete **feature-based software engineering pipeline**.
+Ultracode extends MAKER from **task execution** to a complete **feature-based software engineering pipeline**.
 
 ---
 
-## 🧠 What Ultraagent Is
+## 🧠 What Ultracode Is
 
-Ultraagent turns large language models into **reliable engineering agents** by embedding them inside a deterministic system with memory, validation, and control.
+Ultracode turns large language models into **reliable engineering agents** by embedding them inside a deterministic system with memory, validation, and control.
 
 ### Core Idea
 
@@ -127,7 +127,7 @@ Project
 
 ## 🗳 Voting & Verification Agents
 
-Ultraagent applies **targeted voting at deterministic decision gates**, following the MAKER philosophy.
+Ultracode applies **targeted voting at deterministic decision gates**, following the MAKER philosophy.
 
 ### Why Voting?
 
@@ -167,7 +167,7 @@ Voting is applied to:
 
 ## 🧙 Project Creation Wizard
 
-Ultraagent includes a structured **3-step project wizard**:
+Ultracode includes a structured **3-step project wizard**:
 
 1. **Project Basics**
    - Name and description
@@ -200,8 +200,8 @@ Outputs:
 ### Install
 
 ```bash
-git clone https://github.com/yourusername/ultraagent.git
-cd ultraagent
+git clone https://github.com/yourusername/Ultracode.git
+cd Ultracode
 npm install
 
 Configure
@@ -229,13 +229,13 @@ pending → running → completed → verified
           ↓
        blocked (dependency)
 
-Ultraagent always knows what can run next — and why.
+Ultracode always knows what can run next — and why.
 
 ⸻
 
-🧠 Why Ultraagent Exists
+🧠 Why Ultracode Exists
 
-Ultraagent demonstrates that:
+Ultracode demonstrates that:
 	•	LLMs become reliable inside systems
 	•	Autonomous coding requires memory, structure, and validation
 	•	Voting beats prompt cleverness
@@ -260,5 +260,5 @@ MIT License
 
 ⸻
 
-Ultraagent — Autonomous engineering, grounded in systems, not prompts.
+Ultracode — Autonomous engineering, grounded in systems, not prompts.
 
