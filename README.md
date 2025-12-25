@@ -246,6 +246,8 @@ npm install
 
 ```bash
 cp config.json.example data/config.json
+# or
+Run the application below and click on the settings button in the top right
 ```
 
 Add API keys (the `data/` directory is gitignored).
@@ -253,7 +255,7 @@ Add API keys (the `data/` directory is gitignored).
 ### Run
 
 ```bash
-npm start
+node src/server.js
 # or
 PORT=4173 npm start
 ```
