@@ -1,306 +1,264 @@
-# Ultracode V2 🤖
+# ⚡ Ultraagent
 
-**An autonomous coding agent with feature-based development pipeline**
+**A MAKER-based autonomous feature engineering system**
 
-Ultracode V2 transforms software development by autonomously planning, implementing, and testing complete features with human oversight. Built on a MAKER-inspired architecture, it provides a comprehensive project management system for AI-driven development.
+Ultraagent is a **production-grade autonomous software engineering system** that plans, implements, validates, and commits complete software features using a structured multi-agent architecture.
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Node Version](https://img.shields.io/badge/node-%3E%3D18.0.0-brightgreen)](https://nodejs.org/)
+Ultraagent is inspired by the **MAKER architecture** and implements a **general-purpose agent harness** for reliable, auditable, and cost-aware AI-driven development.
 
-## ✨ Features
-
-- **🎯 Feature-Based Development**: Organize work by features with A/B/C priorities
-- **🔄 Complete Pipeline**: Project → Features → Subtasks → Execution → Testing → Git Commits
-- **🧠 Multi-LLM Support**: OpenAI, Anthropic Claude, Google Gemini, LM Studio (local models)
-- **📊 SQLite Persistence**: Robust database for projects, features, subtasks, and events
-- **🎨 Interactive UI**: 3-column dashboard with live updates via Server-Sent Events
-- **🧪 Automated Testing**: Puppeteer integration for screenshot-based verification
-- **🔗 Dependency Management**: Features can depend on other features with validation
-- **📝 Project Wizard**: AI-powered 3-page wizard for project setup
-- **🔍 Web Research**: Integrated Tavily search for requirement gathering
-- **🔒 Safety First**: Command guards, filesystem sandboxing, human-in-the-loop
-
-## 🚀 Quick Start
-
-### Prerequisites
-
-- Node.js 18.0.0 or higher
-- At least one LLM API key (OpenAI, Anthropic, Gemini) or LM Studio running locally
-
-### Installation
-
-1. **Clone the repository**
-   ```bash
-   git clone https://github.com/yourusername/ultracode.git
-   cd ultracode
-   ```
-
-2. **Install dependencies**
-   ```bash
-   npm install
-   ```
-
-3. **Configure API keys**
-   ```bash
-   # Copy the example configuration
-   cp config.json.example data/config.json
-
-   # Edit data/config.json and add your API keys
-   # Note: data/ folder is gitignored, your keys are safe!
-   ```
-
-4. **Start the server**
-   ```bash
-   npm start
-   # or with custom port
-   PORT=4173 npm start
-   ```
-
-5. **Open the UI**
-   Navigate to `http://localhost:4173` (or your custom port)
-
-## 📖 Usage
-
-### Creating Your First Project
-
-1. **Launch the Project Wizard**
-   - Click "New Project" in the UI
-   - Enter project name and description
-   - The wizard creates folder structure and initializes git
-
-2. **Chat with the AI Assistant**
-   - Describe your project requirements
-   - The AI asks clarifying questions about:
-     - Architecture and stack
-     - Authentication needs
-     - Data models
-     - Testing requirements
-   - Use web search for research on technologies
-
-3. **Review Generated Plan**
-   - AI generates `project.md` with complete specifications
-   - Features extracted with A/B/C priorities
-   - Definition of Done (DoD) for each feature
-   - Select models for Planner, Executor, and Voter
-
-4. **Execute Features**
-   - Features appear in priority order
-   - Click "Execute Next" to run highest priority feature
-   - Watch subtasks execute in real-time
-   - Review code and approve changes
-
-### Understanding the Dashboard
-
-```
-┌──────────────┬──────────────┬────────────────┐
-│  Features    │  Subtasks    │  Terminal      │
-│  (Priority)  │  (Status)    │  (Live Logs)   │
-│              │              │                │
-│  A: ✓ Auth   │  ☑ Created   │  ▶ Starting... │
-│  A: ● DB     │  ⏳ Running  │  ✓ Completed   │
-│  B: ○ Dark   │  ☐ Pending   │  [Files]       │
-│              │              │                │
-│  [+ Add]     │  [Chat]      │                │
-│  [Execute]   │              │                │
-└──────────────┴──────────────┴────────────────┘
-```
-
-**Left Column**: Feature list with priority and status
-**Middle Column**: Selected feature details and subtasks
-**Right Column**: Terminal logs and file browser
-
-### Feature Lifecycle
-
-```
-pending → running → completed → verified
-          ↓              ↓
-       paused        failed
-          ↓
-       blocked (dependencies not met)
-```
-
-- **Pending**: Waiting to be executed
-- **Running**: Currently being processed
-- **Paused**: Execution paused by user
-- **Blocked**: Waiting for dependency features to complete
-- **Completed**: All subtasks finished
-- **Failed**: Execution encountered errors
-- **Verified**: Passed automated tests (if configured)
-
-## 🔧 Configuration
-
-### LLM Providers
-
-The system supports multiple LLM providers simultaneously. Configure in `data/config.json`:
-
-```json
-{
-  "providers": [
-    {
-      "name": "GPT-4o-mini",
-      "type": "openai",
-      "apiKey": "sk-...",
-      "model": "gpt-4o-mini"
-    },
-    {
-      "name": "Claude Sonnet",
-      "type": "anthropic",
-      "apiKey": "sk-ant-...",
-      "model": "claude-sonnet-4-5-20250929"
-    }
-  ],
-  "settings": {
-    "safetyMode": "auto"
-  }
-}
-```
-
-### Safety Modes
-
-- **`auto`**: Execute all commands automatically
-- **`ask`**: Request approval for medium/high risk commands
-
-### Local Models (LM Studio)
-
-1. Start LM Studio and load a model
-2. Enable local server (default: `http://localhost:1234`)
-3. Add to config:
-   ```json
-   {
-     "name": "Local Model",
-     "type": "lmstudio",
-     "model": "model-name",
-     "baseUrl": "http://localhost:1234"
-   }
-   ```
-
-## 🏗️ Architecture
-
-### Core Components
-
-- **`featureStore.js`**: SQLite persistence layer (projects, features, subtasks, events)
-- **`featureManager.js`**: Feature lifecycle orchestration
-- **`featurePlanner.js`**: Decomposes features into atomic subtasks
-- **`wizardAgent.js`**: 3-page project creation wizard
-- **`orchestrator.js`**: Step execution engine (MAKER-based)
-- **`llmRegistry.js`**: Multi-provider LLM management
-- **`gitCommitter.js`**: Feature-level git commits
-- **`projectGuard.js`**: Filesystem sandboxing
-- **`executionGuard.js`**: Command safety validation
-
-### Database Schema
-
-- **projects**: Project metadata, model configs, folder paths
-- **features**: Feature definitions with priorities and dependencies
-- **subtasks**: Atomic implementation steps
-- **events**: Complete audit log
-- **wizard_messages**: Chat history from project creation
-
-### API Endpoints
-
-See [CLAUDE.md](CLAUDE.md) for complete API documentation.
-
-## 🧪 Testing
-
-### Running Tests
-
-```bash
-npm test
-```
-
-### Automated Feature Verification
-
-Ultracode can automatically verify features using Puppeteer:
-
-1. Feature completes execution
-2. Dev server starts automatically (Node, PHP, etc.)
-3. Screenshot captured
-4. LLM verifies against Definition of Done
-5. Feature marked as `verified` or `failed`
-
-## 📁 Project Structure
-
-```
-Ultracode/
-├── src/                    # Backend source code
-│   ├── server.js          # HTTP server + API
-│   ├── featureStore.js    # SQLite wrapper
-│   ├── featureManager.js  # Feature orchestration
-│   ├── featurePlanner.js  # Feature → Subtasks
-│   ├── wizardAgent.js     # Project wizard
-│   └── providers/         # LLM providers
-├── public/                 # Frontend UI
-│   ├── index.html         # Main dashboard
-│   └── ui.js              # Frontend logic
-├── data/                   # Runtime data (gitignored)
-│   ├── config.json        # API keys & settings
-│   ├── ultracode.db       # SQLite database
-│   └── audit.log          # Event log
-├── workspaces/            # Generated projects (gitignored)
-└── docs/                  # Documentation
-```
-
-## 🤝 Contributing
-
-We welcome contributions! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
-
-### Quick Contribution Guide
-
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/amazing-feature`)
-3. Make your changes
-4. Commit your changes (`git commit -m 'Add amazing feature'`)
-5. Push to the branch (`git push origin feature/amazing-feature`)
-6. Open a Pull Request
-
-## 📝 License
-
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
-## 🐛 Known Issues
-
-See [Issues](https://github.com/yourusername/ultracode/issues) for known bugs and feature requests.
-
-## 🗺️ Roadmap
-
-- [x] Phase 1-5: Core feature pipeline system
-- [ ] Phase 6: Puppeteer testing integration
-- [ ] Phase 7: Enhanced context flow system
-- [ ] Phase 8: Advanced git integration
-- [ ] Phase 9: Token tracking UI
-- [ ] Phase 10: V1 to V2 migration tools
-
-## 📚 Documentation
-
-- [Technical Documentation](CLAUDE.md) - Complete system architecture
-- [Architecture Details](docs/architecture.md) - System design
-- [API Reference](CLAUDE.md#api-endpoints) - REST API documentation
-
-## 💬 Support
-
-- **Issues**: [GitHub Issues](https://github.com/yourusername/ultracode/issues)
-- **Discussions**: [GitHub Discussions](https://github.com/yourusername/ultracode/discussions)
-
-## ⚠️ Security
-
-**Important**: Never commit your `data/config.json` file or share your API keys. The `data/` folder is gitignored by default to protect your credentials.
-
-If you accidentally committed sensitive data:
-```bash
-# Remove from git history
-git filter-branch --force --index-filter \
-  "git rm --cached --ignore-unmatch data/config.json" \
-  --prune-empty --tag-name-filter cat -- --all
-
-# Rotate your API keys immediately!
-```
-
-## 🙏 Acknowledgments
-
-- Inspired by the MAKER architecture
-- Built with contributions from the open-source community
-- Powered by OpenAI, Anthropic, Google, and local LLM providers
+Ultraagent is **not a chatbot**.  
+It is an **engineering system**.
 
 ---
 
-**Made with ❤️ by the Ultracode community**
+## 🔬 Research Background
+
+Ultraagent is directly inspired by:
+
+> **MAKER: Multi-Agent Architecture for Knowledge-Driven Reasoning**  
+> Cognizant AI Lab (2024)  
+> https://www.cognizant.com/us/en/ai-lab/blog/maker
+
+From the MAKER paper, Ultraagent adopts:
+
+- Separation of **planning**, **execution**, and **validation**
+- Explicit intermediate representations
+- Error decorrelation via multiple samples
+- Structured voting instead of blind generation
+- Human-in-the-loop safety boundaries
+
+Ultraagent extends MAKER from **task execution** to a complete **feature-based software engineering pipeline**.
+
+---
+
+## 🧠 What Ultraagent Is
+
+Ultraagent turns large language models into **reliable engineering agents** by embedding them inside a deterministic system with memory, validation, and control.
+
+### Core Idea
+
+Project
+→ Features (prioritized, dependency-aware)
+→ Subtasks (atomic, executable)
+→ Voting-based execution
+→ Validation
+→ Git commits
+
+---
+
+## ✨ Key Capabilities
+
+### 🎯 Feature-Based Development
+- Work is organized as **features**, not prompts
+- Priorities: **A / B / C**
+- Explicit dependencies and blocking rules
+
+### 🧠 Structured Agent Roles
+- **Planner Agent** — decomposes features into subtasks
+- **Executor Agent** — generates concrete code and actions
+- **Voting / Verification Agent** — selects safe, correct outputs
+
+### 🗳 Voting & Quality Control
+- Multi-sample generation with adaptive temperature
+- First-to-lead-by-k voting strategy
+- Prompt paraphrasing for error decorrelation
+- Red-flag detection before execution
+
+### 📊 Persistent System State
+- SQLite (WAL mode) as single source of truth
+- Projects, features, subtasks, events
+- Full audit trail (event sourcing)
+
+### 🔒 Safety by Design
+- Filesystem sandboxing
+- Command risk classification
+- Human approval for risky actions
+- No arbitrary code execution
+
+### 🧪 Optional Automated Verification
+- Auto-start dev servers (Node, PHP, static)
+- Screenshot-based UI testing (Puppeteer)
+- LLM-based verification against Definition of Done
+
+### 📈 Cost & Token Transparency
+- Token estimation and pricing per model
+- Real-time project cost breakdown
+- Zero cost for local models
+
+---
+
+## 🧩 Architecture Overview
+
+┌────────────┐
+│   Web UI   │  (live SSE updates)
+└─────┬──────┘
+▼
+┌────────────┐
+│ HTTP API   │
+└─────┬──────┘
+▼
+┌────────────┐
+│ Feature    │
+│ Manager    │
+└─────┬──────┘
+▼
+┌────────────┐
+│ Orchestrator│
+│ (MAKER)    │
+└─────┬──────┘
+▼
+┌────────────┐
+│ Voting     │
+│ Engine     │
+│ + RedFlags │
+└─────┬──────┘
+▼
+┌────────────┐
+│ LLM        │
+│ Registry   │
+└─────┬──────┘
+▼
+┌─────────────────────────────┐
+│ OpenAI · Claude · Gemini    │
+│ Local Models (LM Studio)    │
+└─────────────────────────────┘
+
+---
+
+## 🗳 Voting & Verification Agents
+
+Ultraagent applies **targeted voting at deterministic decision gates**, following the MAKER philosophy.
+
+### Why Voting?
+
+LLMs fail in *correlated* ways.  
+Voting combined with prompt paraphrasing breaks that correlation and improves reliability.
+
+### Decision Flow
+
+Executor Outputs
+↓
+Red-Flag Filtering
+↓
+Vote Tally
+↓
+[ Approve | Retry | Fail | Human Review ]
+
+Voting is applied to:
+- Subtask execution
+- Structured JSON outputs
+- Ambiguous or risky operations
+
+---
+
+## 🧱 Core Components
+
+- **FeatureStore** — SQLite persistence & event sourcing  
+- **FeatureManager** — dependency resolution & execution queue  
+- **FeaturePlanner** — LLM-based feature decomposition  
+- **ContextBuilder** — intelligent prompt assembly  
+- **Orchestrator** — MAKER-style execution engine  
+- **VotingEngine** — consensus selection & error filtering  
+- **ProjectGuard** — filesystem sandbox  
+- **ExecutionGuard** — command safety  
+- **ResourceMonitor** — token & cost tracking  
+
+---
+
+## 🧙 Project Creation Wizard
+
+Ultraagent includes a structured **3-step project wizard**:
+
+1. **Project Basics**
+   - Name and description
+   - Folder creation & git init
+
+2. **AI-Guided Clarification**
+   - Architecture & stack
+   - Data models & authentication
+   - Non-functional requirements
+   - Optional web research
+
+3. **Model Assignment**
+   - Planner model
+   - Executor model
+   - Voting model
+
+Outputs:
+- `project.md` (engineering specification)
+- Feature list with Definition of Done
+- `init.sh` for automated bootstrapping
+
+---
+
+## 🚀 Quick Start
+
+### Requirements
+- Node.js ≥ 18
+- At least one LLM provider (or LM Studio for local models)
+
+### Install
+
+```bash
+git clone https://github.com/yourusername/ultraagent.git
+cd ultraagent
+npm install
+
+Configure
+
+cp config.json.example data/config.json
+
+Add API keys (the data/ directory is gitignored).
+
+Run
+
+npm start
+# or
+PORT=4173 npm start
+
+Open:
+http://localhost:4173
+
+⸻
+
+🧪 Feature Lifecycle
+
+pending → running → completed → verified
+          ↓              ↓
+       paused          failed
+          ↓
+       blocked (dependency)
+
+Ultraagent always knows what can run next — and why.
+
+⸻
+
+🧠 Why Ultraagent Exists
+
+Ultraagent demonstrates that:
+	•	LLMs become reliable inside systems
+	•	Autonomous coding requires memory, structure, and validation
+	•	Voting beats prompt cleverness
+	•	MAKER-style architectures scale beyond research prototypes
+
+This repository is both:
+	•	a usable engineering tool
+	•	a reference implementation of modern agent research
+
+⸻
+
+📜 License
+
+MIT License
+
+⸻
+
+🙏 Acknowledgements
+	•	Cognizant AI Lab — MAKER architecture
+	•	OpenAI, Anthropic, Google
+	•	The autonomous agents research community
+
+⸻
+
+Ultraagent — Autonomous engineering, grounded in systems, not prompts.
+
